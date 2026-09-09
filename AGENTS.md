@@ -69,8 +69,7 @@ it is the ledger, the memory, and git. So, as you go rather than at the end:
 
 ## Two gates that fail while looking correct
 
-- **Branch names are regex-gated** (`narthelix/.github`'s `pr-conventions.yml`,
-  Convention #15): `<type>/<issue-no>-<kebab>`, type one of
+- **Branch names are regex-gated** (Convention #15): `<type>/<issue-no>-<kebab>`, type one of
   `feature|fix|chore|docs|refactor`. An uppercase letter, `_`, `.`, a double or
   trailing hyphen, or a Turkish diacritic (ş/ğ/ı/ö/ü/ç) fails the required
   check while reading correctly. `mani run install-hooks` in the workspace
