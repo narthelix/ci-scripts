@@ -31,6 +31,7 @@ jobs:
       # a dependency here becomes a dependency everywhere -- and a supply-chain
       # surface on a tool that reads our documents.
       - run: python3 test_docs_check.py
+      - run: python3 test_trace_check.py
       # Eat our own cooking: the checker runs against this repository too.
       - run: python3 docs_check.py --root .
 

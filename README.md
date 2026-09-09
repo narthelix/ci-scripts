@@ -72,3 +72,39 @@ gets switched off, which is worse than not having one:
 | Code spans and fenced blocks | a guide *about* linking shows `[x](../a/b.md)` as an example | 2 |
 | Percent-encoded targets | `Uygulama%20Görsel%20Üretimi.md` exists; skipping `unquote` reports a live file as dead | 1 |
 | Vendored trees | `vendor/bundle/ruby/**` alone produced 53 findings, none of them ours | 53 |
+
+### `trace_check.py`
+
+Typed + versioned traceability ([ADR-0098](https://github.com/narthelix/handbook/blob/main/adr/0098-tipli-surumlu-iz-kimligi.md)).
+Connects a written rule to the code implementing it, and a decision to the
+fitness function enforcing it. Both links break **silently** today.
+
+```sh
+python3 trace_check.py rules --rules-file specs/rules/business_rules.md
+python3 trace_check.py tags  --code-root .
+python3 trace_check.py link  --rules-file ../spec-repo/rules.md --code-root ../code-repo \
+                             --adr-dir ../handbook/adr --adr-dir ../spec-repo/adr
+```
+
+**Why the id carries a revision.** Bump a rule and existing coverage becomes
+`outdated`, mechanically. That is the only mechanical answer to a sentence that
+stays *grammatically* true after the thing it described changed — nothing is
+broken, so nothing else notices.
+
+**Why three modes rather than one gate.** A rule can live in a spec repository
+while its implementation lives in a code repository, and a CI token is scoped to
+the repository running the workflow. So each CI checks the half it can see
+(`rules`, `tags`) and the link itself is checked wherever both halves are on
+disk (`link`).
+
+⚠ **Two measured traps this handles**, both pinned by tests:
+
+* **A stub can shadow the real decision.** When an ADR moves between
+  directories a stub is often left under the same number; it carries no
+  `**Status:**` line, so naive last-wins indexing reads the stub and a
+  superseded decision looks live. Measured: 38 numbers existed in both
+  directories. Files stating a status win.
+* **An outdated tag is still an attempt at coverage.** Reporting "no coverage"
+  on top of "your tag is outdated" tells the author something false and doubles
+  the count for one mistake.
+
