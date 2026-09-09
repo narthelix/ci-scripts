@@ -41,14 +41,15 @@ the org. **A public repository cannot call a reusable workflow stored in a
 private one** — GitHub reports `workflow was not found`, creates no jobs, and
 the repository looks quiet rather than broken. That is how both public repos
 here ran for weeks with no gate at all before it was noticed
-(narthelix/muznara#1369). Callers pin a tag, never `main`: a moving ref on a
-required check means an edit here turns every repo's PRs red at once.
+(narthelix/muznara#1369). Callers pin a **full commit SHA**, never `main` and never a tag: a tag can be
+moved, a commit cannot, and a moving ref on a required check means an edit here
+turns every repo's PRs red at once. The version stays legible in a comment.
 
 ```yaml
   pr-conventions:
     if: github.event_name == 'pull_request'
     permissions: { contents: read, pull-requests: read }
-    uses: narthelix/ci-scripts/.github/workflows/pr-conventions.yml@v0.4.0
+    uses: narthelix/ci-scripts/.github/workflows/pr-conventions.yml@4c956655087857d20256c3f42bd6f2fa010d9877  # v0.4.0
     with:
       runner: ubuntu-latest   # required — see the scope lock above
 ```
