@@ -44,6 +44,16 @@ SKIP_DIRS = {
     ".git", ".venv", "venv", "node_modules", "vendor", "build", "dist",
     ".next", ".dart_tool", "Pods", ".symlinks", ".gradle", "__pycache__",
     "coverage", ".terraform",
+    # Flutter regenerates `<platform>/flutter/ephemeral/` on every build, and
+    # `.plugin_symlinks` inside it points at the pub cache — third-party plugin
+    # READMEs, none of them ours. Measured: 65 findings in muznara-mobile alone.
+    #
+    # This one hid from `docs_check.py` for a reason worth writing down: those
+    # are directory SYMLINKS, and `pathlib.rglob` does not follow them, so the
+    # Python half of the gate never saw the tree it was failing to skip. lychee
+    # does follow them, which is how the gap surfaced (narthelix/muznara#1363).
+    # It would have hit muznara-mobile's own gate the day it was switched on.
+    "ephemeral", ".plugin_symlinks",
     # Where CI checks this tool out inside the repo being checked. Without it
     # the checker scans itself, and a link added to THIS repo's README would
     # fail every other repo's gate — an upstream edit turning unrelated PRs red.
