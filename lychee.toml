@@ -1,0 +1,82 @@
+# Shared lychee configuration for the `docs-check` gate.
+#
+# One home, three consumers: the CI reusable workflow, the `pre-push` hook and
+# `mani run docs-check` all pass `--config` at this file. The alternative was
+# the same five flags written out in three places, free to disagree the moment
+# one of them is edited -- the copy class `.docs-check.json` already exists to
+# prevent (narthelix/muznara#623).
+#
+# WHY LYCHEE AND NOT markdownlint MD051
+#
+# narthelix/muznara#1363 was groomed to adopt markdownlint's MD051. Measuring
+# the two before writing either reversed that: **MD051 only validates
+# same-file fragments.** A broken `other.md#anchor` -- the exact class the card
+# was opened for, the ledger's deep links into its own snapshot -- passes MD051
+# silently. lychee checks both, honours explicit `<a id="...">` anchors, applies
+# GitHub's slugging (an em-dash in a heading yields a *double* hyphen), skips
+# code spans and fenced blocks, and ships as a static binary rather than
+# needing Node installed on an ARM64 self-hosted runner.
+
+# External URLs stay deferred (handbook ways-of-working/documentation_gates.md):
+# they need caching and a retry policy, or a required check goes flaky the first
+# time somebody else's site has a bad afternoon. Offline means this gate only
+# ever makes claims about files in this repository.
+offline = true
+
+# The point of the whole exercise. Without it lychee validates the file half of
+# `doc.md#anchor` and drops the fragment, which is precisely what
+# `docs_check.py` already did.
+#
+# `anchor-only`, not `full`: the other half of `full` is *text* fragments
+# (`#:~:text=...`), a browser navigation feature this org's documents do not
+# use. Checking a class we have none of can only ever produce a surprise, and a
+# gate's scope should be the class it was opened for.
+include_fragments = "anchor-only"
+
+# `.github/`, `.claude/` and friends hold real documents with real links.
+# Measured on muznara: the default glob walked 249 of 252 markdown files, and
+# the three it skipped were the PR template, the Copilot instructions and an
+# agent definition. A gate that silently covers less than it appears to is worse
+# than one that is absent, because it is trusted.
+hidden = true
+
+# `docs_check.py` walks the tree and consults no ignore file, so its coverage is
+# defined by `SKIP_DIRS` alone. lychee defaults to honouring `.gitignore`, which
+# would make the two checkers disagree about which files exist -- and the
+# vendored trees that motivated `SKIP_DIRS` are usually gitignored, so the
+# disagreement would be invisible until something in one of them broke.
+no_ignore = true
+
+# Mirrors `docs_check.py`'s SKIP_DIRS. `test_docs_check.py` derives this list
+# from SKIP_DIRS and asserts it matches, because "the link checker and the
+# fragment checker quietly cover different directories" is not a failure anyone
+# would notice by reading either file.
+#
+# ⚠⚠ THESE ARE REGULAR EXPRESSIONS, NOT DIRECTORY NAMES, and the first draft of
+# this file got that wrong in a way that is worth keeping written down. Bare
+# names looked right and silently excluded TEN files, among them
+# `specs/technical/build_state.md` -- the ledger, the single most-read document
+# in the repository. Two independent reasons: the patterns are unanchored, so
+# `build` matched `build_state.md`; and `.` is a regex wildcard, so `.git`
+# matched `flux-gitops`, `_github_`, and every ADR filename containing `-git`.
+# The count dropped 252 -> 242 and nothing failed. Anchored `(^|/)name/` is the
+# form lychee's own example config uses; the trailing slash is what makes this a
+# directory rule instead of a substring one.
+exclude_path = [
+  '(^|/)\.ci-scripts/',
+  '(^|/)\.dart_tool/',
+  '(^|/)\.git/',
+  '(^|/)\.gradle/',
+  '(^|/)\.next/',
+  '(^|/)\.symlinks/',
+  '(^|/)\.terraform/',
+  '(^|/)\.venv/',
+  '(^|/)Pods/',
+  '(^|/)__pycache__/',
+  '(^|/)build/',
+  '(^|/)coverage/',
+  '(^|/)dist/',
+  '(^|/)node_modules/',
+  '(^|/)vendor/',
+  '(^|/)venv/',
+]
