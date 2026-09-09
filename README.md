@@ -101,6 +101,43 @@ gets switched off, which is worse than not having one:
 | Percent-encoded targets | `Uygulama%20Görsel%20Üretimi.md` exists; skipping `unquote` reports a live file as dead | 1 |
 | Vendored trees | `vendor/bundle/ruby/**` alone produced 53 findings, none of them ours | 53 |
 
+### `lychee.toml`
+
+The other half of the same gate: `docs_check.py` validates that a link's **file**
+exists, and this configures [lychee](https://github.com/lycheeverse/lychee) to
+validate its **fragment**. A heading rename otherwise breaks every deep link
+into that document while nothing renders differently.
+
+```sh
+lychee --config lychee.toml './**/*.md'
+```
+
+The pinned version lives in `LYCHEE_VERSION` — one home, read by both the CI
+workflow and the local task, because a version written in two places is two
+versions the day one of them is bumped.
+
+**Why lychee and not markdownlint MD051**, which narthelix/muznara#1363 was
+groomed to adopt: measuring both before writing either reversed the decision.
+
+| | markdownlint MD051 | lychee |
+|---|---|---|
+| `#same-file` fragment | ✅ | ✅ |
+| `other.md#fragment` | ❌ **not checked** | ✅ |
+| explicit `<a id="…">` anchors | ✅ | ✅ |
+| GitHub slugging (em-dash → double hyphen) | ✅ | ✅ |
+| code spans and fenced blocks ignored | ✅ | ✅ |
+| runtime | Node | static binary |
+
+The second row is the whole card: the class it was opened for — a ledger's deep
+links into its own snapshot — is cross-file, and MD051 passes those silently.
+
+⚠ **`exclude_path` entries are regular expressions, not directory names.** The
+first draft listed bare names and silently dropped ten files from the gate,
+`build_state.md` among them (`build` is a substring of it; `.git` is a regex
+matching `-git` in every `flux-gitops` filename). The count went 252 → 242 and
+the run stayed green. `test_docs_check.py` pins both directions: every
+`SKIP_DIRS` directory is excluded, and the real documents that vanished are not.
+
 ### `trace_check.py`
 
 Typed + versioned traceability ([ADR-0098](https://github.com/narthelix/handbook/blob/main/adr/0098-tipli-surumlu-iz-kimligi.md)).

@@ -159,6 +159,74 @@ def main() -> int:
         else:
             print("ok    CLI flag overrides the config file")
 
+    # ------------------------------------------------------------------
+    # lychee.toml must cover exactly the directories docs_check.py skips.
+    #
+    # The two halves of the gate walk the tree independently: docs_check.py
+    # resolves link *targets*, lychee resolves link *fragments*. If their
+    # coverage drifts, one of them quietly stops looking at a directory and
+    # every check it would have made comes back green. Nothing about reading
+    # either file would reveal that, so it is asserted here.
+    import re
+    import tomllib
+
+    cfg_path = pathlib.Path(__file__).parent / "lychee.toml"
+    exclude_path = tomllib.loads(cfg_path.read_text(encoding="utf-8"))["exclude_path"]
+    compiled = [re.compile(p) for p in exclude_path]
+
+    def excluded(path: str) -> bool:
+        return any(c.search(path) for c in compiled)
+
+    # Compared by BEHAVIOUR, not by string equality against a generated list:
+    # the two files legitimately spell the same rule differently (a Python set
+    # of names, a list of regexes), and a test that pins the spelling fails on
+    # a harmless escaping choice while still not proving the coverage matches.
+    # What must hold is that every skipped directory is skipped by both.
+    uncovered = [
+        d
+        for d in sorted(docs_check.SKIP_DIRS)
+        if not (excluded(f"{d}/a.md") and excluded(f"nested/deep/{d}/a.md"))
+    ]
+    if uncovered:
+        failures += 1
+        print("FAIL  lychee.toml does not exclude directories SKIP_DIRS skips:")
+        for d in uncovered:
+            print(f"        {d}")
+    else:
+        print("ok    lychee.toml excludes every SKIP_DIRS directory")
+
+    # ⚠ Measured regression, not a hypothetical. The first draft of lychee.toml
+    # listed the bare directory names, which lychee treats as *unanchored
+    # regular expressions*: `build` matched `specs/technical/build_state.md`
+    # and `.git` matched every ADR filename containing `-git`. Ten files
+    # vanished from the gate -- the ledger among them -- and the run stayed
+    # green. These are the exact paths that disappeared.
+    must_be_checked = [
+        "specs/technical/build_state.md",
+        "specs/technical/build_state_2026-09-08_snapshot.md",
+        "specs/technical/arc42_coverage.md",
+        "specs/technical/adr/0028-flux-gitops-pull-deploy.md",
+        "docs/research/issue_tracking_github_vs_jira_research.md",
+        ".github/pull_request_template.md",
+    ]
+    swallowed = [path for path in must_be_checked if excluded(path)]
+    if swallowed:
+        failures += 1
+        print("FAIL  exclude_path swallows files the gate must check:")
+        for s in swallowed:
+            print(f"        {s}")
+    else:
+        print("ok    exclude_path leaves real documents in scope")
+
+    # And it must still exclude what it is for: a path *inside* one of those
+    # directories, at the root and nested.
+    for path in ("node_modules/pkg/README.md", "app/build/out/notes.md"):
+        if not excluded(path):
+            failures += 1
+            print(f"FAIL  exclude_path fails to exclude {path}")
+        else:
+            print(f"ok    exclude_path excludes {path}")
+
     print(f"\n{'FAILED' if failures else 'all passed'} ({failures} failure(s))")
     return 1 if failures else 0
 
