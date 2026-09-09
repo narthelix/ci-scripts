@@ -37,9 +37,18 @@ stopping someone from undoing the first.
 
 ```sh
 python3 docs_check.py --root .
-python3 docs_check.py --root . --ledger-path specs/technical/build_state.md \
-                     --ledger-budget-bytes 24000
 ```
+
+Per-repo settings live in a `.docs-check.json` at the repository root, so the
+numbers have **exactly one home** — otherwise a ledger budget ends up written in
+the CI workflow *and* in the git hook, two copies free to disagree the day
+someone edits one:
+
+```json
+{ "ledger_path": "specs/technical/build_state.md", "ledger_budget_bytes": 20000 }
+```
+
+Flags still override it for a one-off run (`--ledger-budget-bytes`, `--root`).
 
 Two checks:
 

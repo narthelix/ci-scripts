@@ -126,6 +126,39 @@ def main() -> int:
         else:
             print("ok    ledger missing file is reported")
 
+    # Config file: the budget must have exactly one home, so a repo's
+    # .docs-check.json is what both CI and the git hook read.
+    import json
+    import subprocess
+
+    with tempfile.TemporaryDirectory() as d:
+        root = pathlib.Path(d)
+        (root / "led.md").write_text("x" * 100, encoding="utf-8")
+        (root / ".docs-check.json").write_text(
+            json.dumps({"ledger_path": "led.md", "ledger_budget_bytes": 50}),
+            encoding="utf-8",
+        )
+        here = pathlib.Path(__file__).parent / "docs_check.py"
+        over = subprocess.run(
+            [sys.executable, str(here), "--root", d], capture_output=True, text=True
+        )
+        if over.returncode != 1 or "exceeds the 50 B budget" not in over.stdout:
+            failures += 1
+            print(f"FAIL  config budget not applied: rc={over.returncode}")
+        else:
+            print("ok    config file supplies the budget")
+
+        # An explicit flag still wins, so a one-off run can override.
+        under = subprocess.run(
+            [sys.executable, str(here), "--root", d, "--ledger-budget-bytes", "500"],
+            capture_output=True, text=True,
+        )
+        if under.returncode != 0:
+            failures += 1
+            print(f"FAIL  CLI should override config: rc={under.returncode}")
+        else:
+            print("ok    CLI flag overrides the config file")
+
     print(f"\n{'FAILED' if failures else 'all passed'} ({failures} failure(s))")
     return 1 if failures else 0
 

@@ -32,6 +32,7 @@ the whole workspace, 694 local links):
 from __future__ import annotations
 
 import argparse
+import json
 import pathlib
 import re
 import sys
@@ -49,6 +50,7 @@ SKIP_DIRS = {
     ".ci-scripts",
 }
 EXTERNAL_PREFIXES = ("http://", "https://", "mailto:", "tel:", "#", "<")
+CONFIG_NAME = ".docs-check.json"
 
 
 def strip_code(line: str) -> str:
@@ -129,17 +131,41 @@ def check_ledger(root: pathlib.Path, rel: str, budget: int) -> list[str]:
     ]
 
 
+def load_config(root: pathlib.Path) -> dict:
+    """Per-repo settings, so the numbers have exactly one home.
+
+    Without this the ledger budget would be written in the CI workflow *and* in
+    the git hook — two copies of a number, free to disagree the day someone
+    edits one. The repository that owns the ledger owns its budget.
+    """
+    cfg = root / CONFIG_NAME
+    if not cfg.is_file():
+        return {}
+    try:
+        return json.loads(cfg.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        sys.exit(f"{CONFIG_NAME}: invalid JSON ({exc})")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default=".")
-    ap.add_argument("--ledger-path", default="")
-    ap.add_argument("--ledger-budget-bytes", type=int, default=0)
+    ap.add_argument("--ledger-path", default=None)
+    ap.add_argument("--ledger-budget-bytes", type=int, default=None)
     args = ap.parse_args()
 
     root = pathlib.Path(args.root).resolve()
+    cfg = load_config(root)
+    ledger_path = args.ledger_path if args.ledger_path is not None else cfg.get("ledger_path", "")
+    budget = (
+        args.ledger_budget_bytes
+        if args.ledger_budget_bytes is not None
+        else int(cfg.get("ledger_budget_bytes", 0))
+    )
+
     problems = check_links(root)
-    if args.ledger_path:
-        problems += check_ledger(root, args.ledger_path, args.ledger_budget_bytes)
+    if ledger_path:
+        problems += check_ledger(root, ledger_path, budget)
 
     if not problems:
         print("docs-check: ok")
