@@ -10,8 +10,11 @@ Two checks:
 
 1. **Local link targets resolve.** A markdown link whose target is a path must
    point at something that exists. Cross-repo relative paths (`../other-repo/x`)
-   fail as such: CI checks out one repository, so they are unverifiable here and
-   the convention is an absolute GitHub URL instead.
+   fail as such: they resolve in a side-by-side workspace checkout, but are
+   broken in GitHub's renderer and unverifiable in CI, which checks out one
+   repository. The convention is an absolute URL with the path written beside it
+   in inline code, so a browser reader and an editor/Obsidian reader each get a
+   working affordance.
 2. **Ledger budget.** An entry-state document has a byte budget. Crossing it is
    not an error in itself — it is a prompt to decide, so the message says so.
 
@@ -40,6 +43,10 @@ SKIP_DIRS = {
     ".git", ".venv", "venv", "node_modules", "vendor", "build", "dist",
     ".next", ".dart_tool", "Pods", ".symlinks", ".gradle", "__pycache__",
     "coverage", ".terraform",
+    # Where CI checks this tool out inside the repo being checked. Without it
+    # the checker scans itself, and a link added to THIS repo's README would
+    # fail every other repo's gate — an upstream edit turning unrelated PRs red.
+    ".ci-scripts",
 }
 EXTERNAL_PREFIXES = ("http://", "https://", "mailto:", "tel:", "#", "<")
 
@@ -88,9 +95,15 @@ def check_links(root: pathlib.Path) -> list[str]:
                     resolved.relative_to(root.resolve())
                 except ValueError:
                     problems.append(
-                        f"{where}: `{target}` points outside the repository. "
-                        "CI checks out one repo, so this cannot be verified — "
-                        "use an absolute https://github.com/narthelix/... URL."
+                        f"{where}: `{target}` points outside the repository — "
+                        "a cross-repo relative link resolves in a workspace "
+                        "checkout but is broken on GitHub and unverifiable here. "
+                        "Write it as an absolute URL with the path beside it:\n"
+                        "           the ledger (`muznara/specs/technical/build_state.md`) "
+                        "— [on GitHub](https://github.com/narthelix/muznara/blob/main/...)\n"
+                        "           The link works in a browser and in CI; the "
+                        "inline-code path stays a jump target in an editor or "
+                        "Obsidian (and inline code is not checked)."
                     )
                     continue
 

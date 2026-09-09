@@ -75,6 +75,11 @@ CASES: list[tuple[str, dict[str, str], int]] = [
         0,
     ),
     (
+        "the checker's own checkout is skipped",
+        {".ci-scripts/README.md": "[x](nope.md)"},
+        0,
+    ),
+    (
         "escaping the repo is reported as cross-repo",
         {"a.md": "[x](../other-repo/b.md)"},
         1,
