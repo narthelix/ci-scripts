@@ -35,21 +35,28 @@ jobs:
       # Eat our own cooking: the checker runs against this repository too.
       - run: python3 docs_check.py --root .
 
+  # Same-repo reference, deliberately: this repo is public, and a public
+  # repository cannot call a reusable workflow in a private one. That is why
+  # these two gates were moved here in the first place (ADR-0099) -- and why
+  # this file must never point back at the private repo. `./` also means the
+  # gate a PR proposes is the gate that PR runs, which is the right property
+  # for the repo that owns them.
   pr-conventions:
     if: github.event_name == 'pull_request'
     permissions:
       contents: read
       pull-requests: read
-    uses: narthelix/.github/.github/workflows/pr-conventions.yml@main
+    uses: ./.github/workflows/pr-conventions.yml
     with:
-      # Issue'lar narthelix/muznara'nin tracker'inda; dal adi numarayi tasiyor.
+      # Issues live in narthelix/muznara's tracker; the branch name carries the
+      # number, and a bare `#N` here would resolve against this repo.
       require_issue_link: false
-      runner: ubuntu-latest  # public repo -- gerekce dosya basinda (#918)
+      runner: ubuntu-latest  # public repo -- rationale at the top of this file
 
   secret-scan:
     permissions:
       contents: read
       pull-requests: read
-    uses: narthelix/.github/.github/workflows/secret-scan.yml@main
+    uses: ./.github/workflows/secret-scan.yml
     with:
-      runner: ubuntu-latest  # public repo -- gerekce dosya basinda (#918)
+      runner: ubuntu-latest  # public repo -- rationale at the top of this file

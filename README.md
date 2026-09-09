@@ -15,8 +15,8 @@ Everything here is therefore written to be safe to publish.
 here.** Concretely, the following stay in `narthelix/.github`, which is private:
 
 - runner labels, host names, IP addresses, network or cluster topology
-- issue-tracker conventions, branch regexes, org-specific process rules
 - anything reading a secret, or naming where a secret lives
+- anything whose value would have to be a *default* here to be useful
 
 A useful test before adding a file: *if a stranger reads this, do they learn
 anything about how we are built, or only how a link checker works?* Only the
@@ -25,6 +25,33 @@ second kind belongs here.
 This boundary erodes by accident, not by decision — one script that "just needs
 the runner label" is how it goes. There is no such script; pass what it needs as
 an argument instead.
+
+**Mechanisms may live here; the values they run on may not** (ADR-0099). A gate
+that checks branch names is a mechanism, and it belongs here — a public
+repository is the only place every repo in the org can reach, public ones
+included. The runner it executes on is infrastructure, so `runner` is a
+**required** input with no default: this file cannot hold the answer, and a
+caller that omits it fails loudly instead of quietly moving onto billed
+hosted minutes.
+
+## Reusable workflows
+
+`pr-conventions.yml` and `secret-scan.yml` are called by every repository in
+the org. **A public repository cannot call a reusable workflow stored in a
+private one** — GitHub reports `workflow was not found`, creates no jobs, and
+the repository looks quiet rather than broken. That is how both public repos
+here ran for weeks with no gate at all before it was noticed
+(narthelix/muznara#1369). Callers pin a tag, never `main`: a moving ref on a
+required check means an edit here turns every repo's PRs red at once.
+
+```yaml
+  pr-conventions:
+    if: github.event_name == 'pull_request'
+    permissions: { contents: read, pull-requests: read }
+    uses: narthelix/ci-scripts/.github/workflows/pr-conventions.yml@v0.4.0
+    with:
+      runner: ubuntu-latest   # required — see the scope lock above
+```
 
 ## Tools
 
