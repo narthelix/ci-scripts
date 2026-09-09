@@ -1,0 +1,158 @@
+# Reusable branch-naming + issue-traceability gate.
+#
+# Language-agnostic on purpose: this encodes a naming rule, not a build, so it
+# belongs to every repository in the org — including the ones that hold no code.
+#
+# GitHub Repository Rulesets' native branch_name_pattern rule returns 422 on the
+# Pro/Team plan (Enterprise only), so this runs as a status check instead.
+#
+# ---------------------------------------------------------------------------
+# WHY THIS LIVES IN A PUBLIC REPOSITORY (ADR-0097, ADR-0099)
+#
+# A workflow in a public repository cannot call a reusable workflow stored in a
+# private one. GitHub reports that as `workflow was not found`, and the run
+# never starts: no jobs are created, so the repository looks quiet rather than
+# broken. Access settings do not change it — "accessible from the organization"
+# does not reach a public caller.
+#
+# `runner` therefore has NO DEFAULT. The org's runner labels are infrastructure
+# detail and stay with the caller, which is where the scope lock puts them. A
+# default would also be the wrong shape of failure: a caller that forgot the
+# input would quietly move onto billed hosted minutes instead of failing.
+name: pr-conventions
+
+on:
+  workflow_call:
+    inputs:
+      runner:
+        description: >-
+          runs-on value. Plain label or a JSON array as a string. Required: this
+          repository is public and holds no runner labels of its own.
+        required: true
+        type: string
+      skip_paths:
+        description: >-
+          Space-separated path prefixes. A PR touching ONLY these is skipped
+          (skipped-as-Success keeps a required check green). Empty — the default
+          — never skips, which is what a docs/config repo wants: there
+          "docs-only" is every PR, and the skip would disable the gate entirely.
+        required: false
+        type: string
+        default: ''
+      require_issue_link:
+        description: >-
+          Require Closes/Fixes/Resolves/Refs #N in the PR body. Leave false in a
+          repo whose driving issues live in another repo's tracker — a bare #N
+          resolves against the PR's own repo, so it would render as a broken
+          reference. The branch name still carries the issue number there.
+        required: false
+        type: boolean
+        default: true
+      branch_pattern:
+        required: false
+        type: string
+        default: '^(feature|fix|chore|docs|refactor)/[1-9][0-9]*-[a-z0-9]+(-[a-z0-9]+)*$'
+      exempt_authors:
+        description: >-
+          Comma-separated bot logins. Their branch names can never match the
+          convention and their bodies carry no issue link by design, so without
+          this every bot PR is permanently unmergeable (found live).
+        required: false
+        type: string
+        default: 'dependabot[bot],renovate[bot]'
+
+jobs:
+  gate:
+    runs-on: ${{ startsWith(inputs.runner, '[') && fromJSON(inputs.runner) || inputs.runner }}
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # Scope gate, computed in shell rather than via a paths-filter template:
+      # interpolating a multiline input into the action's `filters:` string
+      # drops the continuation lines' indentation and produces invalid YAML.
+      # Prefix matching is equivalent for the `specs/`-style exclusions in use.
+      - name: Decide whether this PR is in scope
+        id: scope
+        env:
+          SKIP_PREFIXES: ${{ inputs.skip_paths }}
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SKIP_PREFIXES// }" ] || [ "$EVENT_NAME" != "pull_request" ]; then
+            echo "in_scope=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            # Base unreachable (force-push): fail open into scope rather than
+            # silently skipping a gate.
+            echo "in_scope=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          in_scope=false
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            skip=false
+            for p in $SKIP_PREFIXES; do
+              case "$f" in "$p"*) skip=true ;; esac
+            done
+            [ "$skip" = true ] || in_scope=true
+          done < <(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
+          echo "in_scope=$in_scope" >> "$GITHUB_OUTPUT"
+
+      - name: Check author exemption
+        id: author
+        env:
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          EXEMPT: ${{ inputs.exempt_authors }}
+        run: |
+          set -euo pipefail
+          # PR *author*, not github.actor: actor is whoever triggered the event,
+          # so a human editing a bot PR's body would otherwise break the exemption.
+          exempt=false
+          IFS=',' read -ra names <<< "$EXEMPT"
+          for n in "${names[@]}"; do
+            [ "$(echo "$n" | xargs)" = "$AUTHOR" ] && exempt=true
+          done
+          echo "exempt=$exempt" >> "$GITHUB_OUTPUT"
+
+      - name: Check branch name
+        if: steps.author.outputs.exempt == 'false' && steps.scope.outputs.in_scope == 'true'
+        env:
+          BRANCH: ${{ github.head_ref }}
+          PATTERN: ${{ inputs.branch_pattern }}
+        run: |
+          if [[ ! "$BRANCH" =~ $PATTERN ]]; then
+            echo "::error::Branch name '$BRANCH' does not match <type>/<issue-no>-<kebab-description>"
+            echo "Expected pattern: $PATTERN (types: feature, fix, chore, docs, refactor)"
+            exit 1
+          fi
+
+      # An optional `owner/repo` between the keyword and the `#` is ACCEPTED, and
+      # that is the point of the pattern rather than an afterthought.
+      #
+      # The narrow form (`refs[[:space:]]*#N`) rejected `Refs owner/repo#N` — a
+      # reference that renders perfectly inside the tracker repo, which is the
+      # only repo where this check is even on. So the gate was failing a VALID
+      # body and sending the author to rewrite a correct sentence. It bit
+      # repeatedly, most visibly on a fleet-wide sweep whose one shared body was
+      # written in the cross-repo form.
+      #
+      # ⚠ The looser form does not weaken anything: this step only runs where
+      # `require_issue_link` is true, i.e. the repo that owns the tracker. In every
+      # other repo the input is false precisely because a bare `#N` there would
+      # resolve against the wrong repo -- and that reasoning is unchanged.
+      - name: Check PR body links an issue
+        if: inputs.require_issue_link && steps.author.outputs.exempt == 'false' && steps.scope.outputs.in_scope == 'true'
+        env:
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          if ! grep -qiE '\b(closes|fixes|resolves|refs)\b[[:space:]]*([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)?#[0-9]+' <<< "$BODY"; then
+            echo "::error::PR body must reference an issue: 'Closes #N' / 'Refs #N', or the cross-repo form 'Refs owner/repo#N'."
+            exit 1
+          fi
