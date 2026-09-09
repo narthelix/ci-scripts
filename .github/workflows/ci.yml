@@ -1,0 +1,54 @@
+# Contract: handbook engineering/pipelines.md.
+#
+# ---------------------------------------------------------------------------
+# GITHUB-HOSTED RUNNER, self-hosted DEGIL -- tercih degil, zorunluluk
+# (narthelix/muznara#918). Org'un runner grubu `allows_public_repositories:
+# false` tasiyor, yani bu PUBLIC repo o makineyi zaten alamaz ve
+# `[self-hosted, ...]` etiketiyle isler sonsuza kadar kuyrukta beklerdi.
+# Ayar da dogru ayar: fork'tan acilan bir PR `pull_request` icin workflow'u
+# PR'in kendi hâliyle kosturuyor, yani `runs-on`'u degistirebiliyor -- kalici
+# bir runner'da bu, bir kez zehirlenip sonraki isleri kirletmek demek.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      # Stdlib only, by design: this is fetched and run by every repo's CI, so
+      # a dependency here becomes a dependency everywhere -- and a supply-chain
+      # surface on a tool that reads our documents.
+      - run: python3 test_docs_check.py
+      # Eat our own cooking: the checker runs against this repository too.
+      - run: python3 docs_check.py --root .
+
+  pr-conventions:
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: narthelix/.github/.github/workflows/pr-conventions.yml@main
+    with:
+      # Issue'lar narthelix/muznara'nin tracker'inda; dal adi numarayi tasiyor.
+      require_issue_link: false
+      runner: ubuntu-latest  # public repo -- gerekce dosya basinda (#918)
+
+  secret-scan:
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: narthelix/.github/.github/workflows/secret-scan.yml@main
+    with:
+      runner: ubuntu-latest  # public repo -- gerekce dosya basinda (#918)

@@ -1,0 +1,10 @@
+# narthelix/ci-scripts — Instructions for Claude
+
+Generic development tooling that the org's CI, git hooks and local tasks all run. **This repo is PUBLIC and that is load-bearing** (ADR-0097): CI in a private repo cannot fetch a file from a sibling private repo — `GITHUB_TOKEN` is scoped to the repo running the workflow — so a public repo is the only way to share a script without minting a PAT to rotate.
+
+- Working rules: the [handbook](https://github.com/narthelix/handbook) — [`CONVENTIONS.md`](https://github.com/narthelix/handbook/blob/main/CONVENTIONS.md).
+- **The scope lock is the whole point of this repo — read `README.md` before adding a file.** Only tooling that reveals nothing about our infrastructure belongs here. Runner labels, hosts, IPs, cluster topology, tracker conventions and branch regexes stay in the private `narthelix/.github`. The boundary erodes by accident: one script that "just needs the runner label" is how it goes. There is no such script — pass it as an argument.
+- **Stdlib only.** Every repo's CI fetches and runs this; a dependency here is a dependency everywhere, and a supply-chain surface on a tool that reads our documents.
+- **`docs_check.py` detects and reports; it never rewrites** (narthelix/muznara#623). Telling an instruction apart from the rationale for an instruction is judgement a scanner cannot make, and deleting the second removes the only thing stopping someone from undoing the first. Any proposal to auto-fix belongs in an ADR first.
+- **A new suppression needs a measured case**, not a hypothetical: add it to `test_docs_check.py` with the real file that produced it. The three existing suppressions each came from a real finding in the 2026-09-09 sweep. A checker that cries wolf gets switched off, which is worse than not having one.
+- **CI runs on `ubuntu-latest`, never self-hosted** — the org runner group is closed to public repos (narthelix/muznara#918), and a fork PR can rewrite `runs-on`.
