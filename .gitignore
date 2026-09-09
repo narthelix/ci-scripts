@@ -1,2 +1,11 @@
 __pycache__/
 *.pyc
+
+# Secrets never enter git. `.env.*` covers .env.local / .env.production etc;
+# the negation keeps the committed template. Added org-wide 2026-09-09 after a
+# committed `.env` was found in narthelix/local-env history
+# (narthelix/muznara#1361) -- `secret-scan` is the gate, this is the second
+# layer that stops the file being staged in the first place.
+.env
+.env.*
+!.env.example
