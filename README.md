@@ -173,3 +173,43 @@ disk (`link`).
   on top of "your tag is outdated" tells the author something false and doubles
   the count for one mistake.
 
+
+### `dead_jobs.py`
+
+Finds CI jobs that are red and **stop nobody** — the failures nothing reports.
+
+```sh
+GITHUB_TOKEN=... python3 dead_jobs.py --org <org> --window 10
+GITHUB_TOKEN=... python3 dead_jobs.py --org <org> --format json
+```
+
+A red pull-request check blocks a merge, so it announces itself. A red
+scheduled or event-driven run blocks nothing: the work simply does not happen
+and the board looks the same either way. Measured 2026-09-19 across one
+organisation's 77 active workflows — **five were dead**, one for three weeks,
+one that had never been green in its life; two of them had been found by
+accident weeks earlier and nobody had asked how many more there were.
+
+⚠ **The threshold is *no green run in the window*, never *the last run
+failed*** — and that is the whole design. On the day of the measurement four
+repositories had a single red `main` run because CI runners were saturated by
+one batch of pushes; every one was green the day before and green again after.
+Naming those would have produced four notifications nobody needs, from one
+event, which is the disease this tool exists to cure wearing a different hat.
+A failure that heals itself is invisible here **by choice**.
+
+⚠ **A `workflow_call`-only file is not a dead workflow.** It has no runs of its
+own — its runs belong to the repositories that call it. The first version of
+this scan counted seven of them as "never ran": seven false alarms out of eight
+findings. `on:` is read before any zero-run workflow is reported.
+
+⚠ **Two traps in the API itself**, both pinned by tests: `conclusion` is an
+empty string (not `null`) while a run is in flight, so any `or`-style default
+scores "still running" as a verdict; and `total_count` on a filtered
+`runs?status=` query reports the **unfiltered** total, so it is never used for
+counting.
+
+Exit code is 0 even with findings. The report is the output — a non-zero exit
+would make this a gate that blocks something, which is exactly what it is not.
+Organisation, window and exclusions are arguments with **no defaults**: where it
+runs and what it watches are not facts a public repository may hold.
