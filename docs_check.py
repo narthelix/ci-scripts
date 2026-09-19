@@ -124,6 +124,71 @@ def check_links(root: pathlib.Path) -> list[str]:
     return problems
 
 
+def parse_frontmatter(lines: list[str]) -> tuple[dict[str, str], int]:
+    """Return (key->value, body_start_line_index). Empty dict if no frontmatter."""
+    if not lines or lines[0].strip() != "---":
+        return {}, 0
+    fm: dict[str, str] = {}
+    for i in range(1, len(lines)):
+        if lines[i].strip() == "---":
+            return fm, i + 1
+        if ":" in lines[i]:
+            key, val = lines[i].split(":", 1)
+            fm[key.strip()] = val.strip()
+    return {}, 0
+
+
+def check_handbook_stubs(root: pathlib.Path, cfg: dict) -> list[str]:
+    """Handbook redirect stubs must declare redirect + canonical: false (#1683).
+
+    Opt-in via `.docs-check.json` → `handbook_stubs`. Only scans one directory
+    of flat `*.md` files; a stub is detected by marker text and a line cap.
+    """
+    hs = cfg.get("handbook_stubs")
+    if not isinstance(hs, dict):
+        return []
+
+    rel_dir = hs.get("directory", "")
+    marker = hs.get("marker", "moved to the handbook").lower()
+    max_lines = int(hs.get("max_lines", 12))
+    prefix = hs.get("redirect_prefix", "https://github.com/narthelix/handbook/")
+
+    if not rel_dir:
+        return []
+
+    stub_dir = root / rel_dir
+    if not stub_dir.is_dir():
+        return [f"{rel_dir}: handbook_stubs.directory does not exist"]
+
+    problems: list[str] = []
+    for path in sorted(stub_dir.glob("*.md")):
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeDecodeError) as exc:
+            problems.append(f"{path.relative_to(root)}: unreadable ({exc})")
+            continue
+
+        body = "\n".join(lines).lower()
+        if marker not in body or len(lines) > max_lines:
+            continue
+
+        fm, _ = parse_frontmatter(lines)
+        rel = path.relative_to(root)
+        canonical = fm.get("canonical", "").lower()
+        if canonical not in ("false", "0", "no"):
+            problems.append(
+                f"{rel}: handbook stub must set `canonical: false` in frontmatter "
+                "(narthelix/muznara#1683)"
+            )
+        redirect = fm.get("redirect", "")
+        if not redirect.startswith(prefix):
+            problems.append(
+                f"{rel}: handbook stub must set `redirect:` to the handbook URL "
+                f"(expected prefix {prefix!r})"
+            )
+    return problems
+
+
 def check_ledger(root: pathlib.Path, rel: str, budget: int) -> list[str]:
     ledger = root / rel
     if not ledger.is_file():
@@ -176,6 +241,11 @@ def main() -> int:
     problems = check_links(root)
     if ledger_path:
         problems += check_ledger(root, ledger_path, budget)
+    problems += check_handbook_stubs(root, cfg)
+
+    stub_problems = [p for p in problems if "handbook stub" in p]
+    if stub_problems:
+        print(f"handbook-stubs: {len(stub_problems)} problem(s)")
 
     if not problems:
         print("docs-check: ok")
