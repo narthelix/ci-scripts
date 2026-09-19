@@ -179,6 +179,39 @@ check(
     True,
 )
 
+
+# --- a reusable workflow's own red history proves nothing ------------------- #
+
+check(
+    "reusable dosyanin startup-failure gecmisi raporlanmaz",
+    dj.suppressed_as_reusable(dj.STARTUP_FAILURE, True),
+    True,
+)
+
+check(
+    "reusable dosyanin dead gecmisi de raporlanmaz",
+    dj.suppressed_as_reusable(dj.DEAD, True),
+    True,
+)
+
+check(
+    "reusable OLMAYAN dosya bastirilmaz",
+    dj.suppressed_as_reusable(dj.DEAD, False),
+    False,
+)
+
+check(
+    "okunamayan dosya bastirilmaz (unknown zaten raporlanmiyor)",
+    dj.suppressed_as_reusable(dj.DEAD, None),
+    False,
+)
+
+check(
+    "never-ran muaf: o dal soruyu zaten sordu",
+    dj.suppressed_as_reusable(dj.NEVER_RAN, True),
+    False,
+)
+
 # --- rendering ------------------------------------------------------------ #
 
 check(
