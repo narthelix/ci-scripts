@@ -74,6 +74,9 @@ NEVER_RAN = "never-ran"
 LIVE = "live"
 PR_ONLY = "pr-only"
 REUSABLE = "reusable"
+# Zero runs and the definition could not be read: silently dropping this would
+# hide a broken token, so it is counted and printed, never reported as a death.
+UNKNOWN = "unknown"
 
 REPORTED = (NEVER_GREEN, STARTUP_FAILURE, DEAD, NEVER_RAN)
 
@@ -132,6 +135,8 @@ def classify(
     if not runs:
         # A file with no runs at all is either something nobody triggers, or a
         # reusable workflow whose runs belong to its callers.
+        if is_reusable is None:
+            return UNKNOWN, "tanim okunamadi"
         return (REUSABLE, "workflow_call") if is_reusable else (NEVER_RAN, "")
 
     verdicts = scored(runs)
@@ -188,22 +193,32 @@ def list_repos(org: str, token: str) -> list[str]:
     return names
 
 
-def is_reusable_workflow(org: str, repo: str, path: str, token: str) -> bool:
-    """True when the file's only trigger is `workflow_call`.
+def is_reusable_workflow(org: str, repo: str, path: str, token: str) -> bool | None:
+    """True when the file's only trigger is `workflow_call`; None when unreadable.
+
+    ⚠ The three states are not pedantry. Measured 2026-09-19: run locally with a
+    broadly-scoped token every reusable workflow was filtered out correctly, and
+    the same code in CI — with a fine-grained token lacking `Contents: read` —
+    reported five of them as `never-ran`, because an unreadable file was being
+    read as "not reusable". Half that run's findings were false. *A file we
+    could not open is not evidence of a dead workflow*, so it is reported as
+    nothing at all and counted instead.
 
     Read only for zero-run workflows, which keeps this to a handful of calls.
     Parsed textually rather than with a YAML library: stdlib only, and the
     question is narrow enough that a parser would be the riskier answer.
     """
     data = _get(f"/repos/{org}/{repo}/contents/{path}", token)
-    if not data or "content" not in data:
-        return False
+    if data is None:
+        return None  # 403/404 — permission or gone; not an answer either way
+    if "content" not in data:
+        return None
     import base64
 
     try:
         body = base64.b64decode(data["content"]).decode("utf-8", "replace")
     except Exception:
-        return False
+        return None
     triggers = []
     inside = False
     for line in body.splitlines():
@@ -260,7 +275,7 @@ def scan_repo(org: str, repo: str, token: str, window: int) -> list[Finding]:
         kind, detail = classify(
             runs, is_reusable=reusable, window_full=len(runs) >= window
         )
-        if kind not in REPORTED:
+        if kind not in REPORTED and kind != UNKNOWN:
             continue
         since = ""
         if verdicts:
@@ -280,11 +295,17 @@ def scan_repo(org: str, repo: str, token: str, window: int) -> list[Finding]:
 
 
 def render_text(findings: list[Finding], repos: int, org: str) -> str:
-    if not findings:
-        return f"{org}: {repos} repo tarandi, kimseyi durdurmayan kirmizi yok."
+    unknown = [f for f in findings if f.kind == UNKNOWN]
+    rows = [f for f in findings if f.kind in REPORTED]
+    # ⚠ Printed even when it is zero findings: an unreadable definition means
+    # the token is narrower than the scan needs, and a scan that quietly sees
+    # less than it should is the failure this tool is about.
+    gap = f" (⚠ {len(unknown)} workflow'un tanimi okunamadi)" if unknown else ""
+    if not rows:
+        return f"{org}: {repos} repo tarandi, kimseyi durdurmayan kirmizi yok.{gap}"
     order = {k: i for i, k in enumerate(REPORTED)}
-    rows = sorted(findings, key=lambda f: (order.get(f.kind, 9), f.since))
-    lines = [f"{org}: {repos} repo tarandi, {len(rows)} bulgu"]
+    rows = sorted(rows, key=lambda f: (order.get(f.kind, 9), f.since))
+    lines = [f"{org}: {repos} repo tarandi, {len(rows)} bulgu{gap}"]
     for f in rows:
         age = f" (en eski kirmizi {f.since})" if f.since else ""
         extra = f" — {f.detail}" if f.detail else ""
