@@ -142,6 +142,43 @@ check(
     dj.PR_ONLY,
 )
 
+
+# --- an unreadable definition is not a death -------------------------------- #
+#
+# Measured 2026-09-19: the same code that filtered every reusable workflow
+# locally reported five of them as `never-ran` in CI, because the token could
+# not read the files and "unreadable" was being scored as "not reusable".
+# Half that run's findings were false — on a tool whose entire value is not
+# crying wolf.
+
+check(
+    "tanim okunamiyorsa -> unknown, never-ran DEGIL",
+    dj.classify([], is_reusable=None, window_full=False)[0],
+    dj.UNKNOWN,
+)
+
+check(
+    "unknown raporlanmaz",
+    dj.UNKNOWN in dj.REPORTED,
+    False,
+)
+
+check(
+    "ama sessizce yutulmaz: sayisi metinde gorunur",
+    "tanimi okunamadi" in dj.render_text(
+        [dj.Finding("r", "w", "p", dj.UNKNOWN)], 31, "acme"
+    ),
+    True,
+)
+
+check(
+    "bulgu yokken bile bosluk bildirilir",
+    "kimseyi durdurmayan kirmizi yok" in dj.render_text(
+        [dj.Finding("r", "w", "p", dj.UNKNOWN)], 31, "acme"
+    ),
+    True,
+)
+
 # --- rendering ------------------------------------------------------------ #
 
 check(
