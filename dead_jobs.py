@@ -81,6 +81,23 @@ UNKNOWN = "unknown"
 REPORTED = (NEVER_GREEN, STARTUP_FAILURE, DEAD, NEVER_RAN)
 
 
+def suppressed_as_reusable(kind: str, is_reusable: bool | None) -> bool:
+    """Should a finding be dropped because the file is a reusable workflow?
+
+    ⚠ A `workflow_call` file can still own a few runs: while it is being
+    introduced a push produces a startup failure attributed to the file, and
+    that red stays in its history for ever. Its real work is recorded against
+    its callers, so its own history says nothing about whether it is alive.
+    Measured 2026-09-19 — `.github`'s `db-migrations` was reported dead on four
+    such runs from the day it landed, while both callers had been invoking it
+    successfully ever since.
+
+    `never-ran` is exempt: that branch already asked the question and got its
+    answer, and asking twice would cost a second call.
+    """
+    return kind != NEVER_RAN and is_reusable is True
+
+
 @dataclass
 class Finding:
     repo: str
@@ -268,7 +285,7 @@ def scan_repo(org: str, repo: str, token: str, window: int) -> list[Finding]:
             jobs = _get(f"/repos/{org}/{repo}/actions/runs/{verdicts[0]['id']}/jobs", token)
             verdicts[0]["jobs_count"] = len((jobs or {}).get("jobs", []))
 
-        reusable = False
+        reusable: bool | None = False
         if not runs:
             reusable = is_reusable_workflow(org, repo, path, token)
 
@@ -276,6 +293,20 @@ def scan_repo(org: str, repo: str, token: str, window: int) -> list[Finding]:
             runs, is_reusable=reusable, window_full=len(runs) >= window
         )
         if kind not in REPORTED and kind != UNKNOWN:
+            continue
+
+        # ⚠ A reusable workflow can still own a handful of runs: while it is
+        # being introduced, a push can produce a startup failure attributed to
+        # the file, and that red stays in its history for ever. Its real work
+        # is recorded against the callers, so its own history says nothing
+        # about whether it is alive. Measured 2026-09-19: `.github`'s
+        # `db-migrations` was reported as a dead startup-failure on the
+        # strength of four such runs from the day it landed, while both of its
+        # callers had been invoking it successfully ever since.
+        #
+        # Checked only for workflows already about to be reported — a few
+        # calls, not one per workflow.
+        if suppressed_as_reusable(kind, is_reusable_workflow(org, repo, path, token)):
             continue
         since = ""
         if verdicts:
