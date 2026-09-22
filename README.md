@@ -174,6 +174,57 @@ disk (`link`).
   the count for one mistake.
 
 
+### `ghcr_prune.py`
+
+Prunes old **tagged** container versions from an organisation's registry.
+
+```sh
+GITHUB_TOKEN=... python3 ghcr_prune.py --org <org> --declared <path-to-checkout>
+GITHUB_TOKEN=... python3 ghcr_prune.py --org <org> --declared <path> --keep 10 --execute
+```
+
+A registry with no retention policy is not a disk that fills up — it is a bill
+that arrives as a **stopped release**. Measured 2026-09-22: a plan's 2 GB of
+storage is shared between Actions artifacts, Actions caches and packages, every
+green `main` commit pushes an image, nothing removes one, and the wall was hit
+inside a release job that had already built and signed its artifact. The same
+wall then killed a security scan's report upload — after the scan itself had
+passed clean. Neither failure named storage in its headline.
+
+Three protections, unioned: every tag the **declarative repository** mentions,
+every tag starting with `v`, and the newest `--keep` tagged versions of each
+package.
+
+⚠ **The declarative repository is read as text, and the protected set is
+deliberately over-broad.** Tags live in at least three shapes — kustomize's
+`newTag:`, an inline `image: registry/name:tag`, and a Helm values block that
+splits `repository:` from `tag:` across two lines — and a sweep written for two
+of them silently misses the third. That happened: the first version missed a
+database image whose tag sat alone under a `tag:` key. Over-protecting costs
+storage; under-protecting costs production. Measured cost on a real tree: 22
+protected values against 21 that a strict YAML walk finds.
+
+⚠ **The declarative repository, not the cluster.** Measured on a live cluster
+the same day: the only tags it holds that the declarative repo does not are the
+images of *completed* Job pods, which nothing restarts. The declarative repo
+carries the opposite and more dangerous case — a suspended environment's pin,
+which is invisible to the cluster and is exactly the tag a resume would pull.
+
+⚠ **Untagged versions are never touched.** In one package 287 of 440 versions
+were untagged: buildx provenance/attestation manifests and the per-architecture
+children of multi-arch images. Deleting those breaks the live image while
+looking like housekeeping.
+
+⚠ **An empty protected set stops the run**, as does an empty package list. Both
+read as "nothing to protect" and would otherwise delete the estate.
+
+⚠ **Deletion needs its own scope.** `write:packages` is not enough; without
+`delete:packages` every DELETE returns 403 — and a counter that counts
+*intentions* reports a clean sweep through all of them. This counts responses.
+
+Dry run is the default. Organisation, declarative path and `--keep` are
+arguments with no defaults.
+
 ### `dead_jobs.py`
 
 Finds CI jobs that are red and **stop nobody** — the failures nothing reports.
