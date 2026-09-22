@@ -174,6 +174,43 @@ disk (`link`).
   the count for one mistake.
 
 
+### `storage_usage.py`
+
+Measures what an organisation actually holds in its **shared storage quota**
+(Actions artifacts + Packages), by counting the estate rather than reading a
+bill.
+
+```sh
+GITHUB_TOKEN=... python3 storage_usage.py --org <org> --warn-at 1.6
+```
+
+⚠ **The billing endpoint cannot answer this question.** It reports storage in
+**GigabyteHours** — the integral of what was held over time, not what is held
+now — so a month spent under the cap and a month that spent one day at 30× the
+cap can print the same number. Measured 2026-09-22: that endpoint's daily
+breakdown and its monthly total for the same period disagree by four orders of
+magnitude.
+
+⚠ **Caches are deliberately not in the number.** GitHub's documentation:
+*"Cache storage is a separate allowance of 10 GB per repository. Cache storage
+is not shared with artifacts or GitHub Packages."*
+
+⚠ **A layer shared between versions is counted once.** The packages API does not
+report a version's size, so manifests are fetched and **unique blob digests**
+summed. Counting per version reports a number several times larger than the
+truth, because consecutive images of one service share most of their layers —
+or, when they do not, that is itself the finding.
+
+⚠ **Coverage is reported, not assumed.** Only tagged versions are walked;
+untagged ones are covered when an index references them, and any that remain
+unreached are printed as uncovered. The first version of this sweep printed a
+confident total while half its packages had silently failed to list — so a
+failed listing now stops the run instead of shrinking the answer.
+
+Report-only: exit code stays 0 whatever the number, and the caller decides what
+a number above the threshold means. Organisation and threshold are arguments
+with no defaults.
+
 ### `ghcr_prune.py`
 
 Prunes old **tagged** container versions from an organisation's registry.
