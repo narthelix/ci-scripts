@@ -3,10 +3,13 @@
 
 A registry with no retention policy is not a disk that fills up — it is a bill
 that arrives as a *stopped release*. Measured 2026-09-22 (narthelix/muznara#1758):
-a plan's 2 GB of storage is shared between Actions artifacts, Actions caches and
-**packages**, every green `main` commit pushes an image, nothing ever removes
-one, and the wall was hit inside a release job that had already built and signed
-its artifact. The same wall then knocked over a security scan's report upload —
+a plan's 2 GB of storage is shared between Actions artifacts and **packages**,
+every green `main` commit pushes an image, nothing ever removes one, and the
+wall was hit inside a release job that had already built and signed its
+artifact. (⚠ Corrected 2026-09-23: the first version of this line also counted
+Actions *caches*. It should not -- the documentation is explicit that cache
+storage is a separate 10 GB per-repository allowance -- and the error mattered,
+because 36 GB of caches were being read as part of a 2 GB pool.) The same wall then knocked over a security scan's report upload —
 a scan that had itself passed clean. Neither failure named storage in its
 headline; both looked like the job's own subject.
 
