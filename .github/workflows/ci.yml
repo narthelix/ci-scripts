@@ -33,6 +33,7 @@ jobs:
       - run: python3 test_docs_check.py
       - run: python3 test_trace_check.py
       - run: python3 test_dead_jobs.py
+      - run: python3 test_ghcr_prune.py
       # Eat our own cooking: the checker runs against this repository too.
       - run: python3 docs_check.py --root .
 
