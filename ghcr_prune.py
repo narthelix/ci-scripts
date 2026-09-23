@@ -36,10 +36,32 @@ first version of this sweep missed a database image whose tag sat alone under a
 cost of that choice on the real tree: 22 protected values against 21 that a
 strict YAML walk finds — one extra.
 
-⚠ **Untagged versions are never touched.** Measured: 287 of one package's 440
-versions were untagged. Those are buildx provenance/attestation manifests and
-the per-architecture children of a multi-arch image; deleting them breaks the
-live image while looking like housekeeping. The storage is in the tagged ones.
+⚠ **Untagged versions: only the unreachable ones, and only when reachability
+was measured.** Most untagged versions are buildx provenance/attestation
+manifests and the per-architecture children of a multi-arch index; deleting one
+of those breaks the live image while looking like housekeeping. But an untagged
+version that NO surviving tagged version reaches is an orphan, and orphans were
+where the storage actually was. Measured 2026-09-23 (narthelix/muznara#1774):
+**33.6 GB of orphans against 17.5 GB reachable** -- because the first version of
+this script deleted a tagged index and left its children behind (so its
+deletions freed almost nothing), and because a moving tag (`v1` rebuilt in
+place) orphans the index it moves off. So: reachability is computed from the
+versions that SURVIVE this run -- index children plus any manifest whose
+`subject` points at one -- and an orphan is deleted only when it is older than
+`--orphan-age-hours` (a push in flight uploads children before the tagged index).
+If any survivor's manifest cannot be read, that package's orphan pass is
+skipped entirely: a reachability set measured with a hole in it would delete a
+live image's children.
+
+⚠ **A failed listing stops the run.** A version listing that ends early on an
+error looks like a shorter package -- and with orphan deletion, a tagged index
+missing from the listing makes its children look unreachable.
+
+**Mirrored packages** (`--mirror HOST`): a package the declarative repository
+pulls from HOST is served from there, and this registry is only the tag source
+Flux reads plus a fallback. It keeps `--keep-mirrored` newest tagged versions
+and loses rule 2 -- the mirror keeps release tags itself. Declared tags stay
+protected: a suspended environment still pins this registry.
 
 ⚠ **An empty protected set stops the run.** A missing checkout, a renamed
 directory or a bad path all produce "nothing is protected", which reads exactly
@@ -58,6 +80,8 @@ Dry run is the default. `--execute` deletes.
 from __future__ import annotations
 
 import argparse
+import base64
+import datetime as dt
 import json
 import os
 import pathlib
@@ -68,6 +92,19 @@ import urllib.request
 from typing import Any
 
 API = "https://api.github.com"
+REGISTRY = "https://ghcr.io"
+MANIFEST_TYPES = ",".join(
+    [
+        "application/vnd.oci.image.index.v1+json",
+        "application/vnd.oci.image.manifest.v1+json",
+        "application/vnd.docker.distribution.manifest.list.v2+json",
+        "application/vnd.docker.distribution.manifest.v2+json",
+    ]
+)
+
+
+class ListingFailed(RuntimeError):
+    """A listing or manifest read that failed -- never to be read as 'empty'."""
 
 #: `newTag: abc` and `tag: abc` -- any key spelling of a tag, whatever owns it.
 TAG_KEY = re.compile(r'^\s*-?\s*(?:newTag|tag):\s*["\']?([A-Za-z0-9][A-Za-z0-9._-]*)["\']?\s*(?:#.*)?$')
@@ -91,6 +128,29 @@ def declared_tags(root: pathlib.Path) -> set[str]:
                 found.add(key.group(1))
             for _, tag in IMAGE_REF.findall(line):
                 found.add(tag)
+    return found
+
+
+def mirrored_packages(root: pathlib.Path, host: str) -> set[str]:
+    """Package names the declarative tree PULLS from `host`.
+
+    Only an `image:` or kustomize `newName:` value counts. Measured on the real
+    tree (2026-09-23): a looser match also caught a CI step that PUSHES the
+    backup image to the mirror -- and the backup image is the one package that
+    must never be treated as served from there, because the mirror's storage is
+    what that image restores.
+    """
+    ref = re.compile(
+        r'^\s*-?\s*(?:image|newName):\s*["\']?' + re.escape(host) + r"/([a-z0-9._-]+)"
+    )
+    found: set[str] = set()
+    for path in sorted(root.rglob("*")):
+        if ".git" in path.parts or not path.is_file() or path.suffix not in MANIFEST_SUFFIXES:
+            continue
+        for line in path.read_text(errors="replace").splitlines():
+            match = ref.match(line)
+            if match:
+                found.add(match.group(1))
     return found
 
 
@@ -133,10 +193,29 @@ def versions(org: str, package: str, token: str) -> list[dict[str, Any]]:
         status, body = _api(
             f"/orgs/{org}/packages/container/{package}/versions?per_page=100&page={page}", token
         )
-        if status != 200 or not isinstance(body, list) or not body:
-            break
+        if status != 200 or not isinstance(body, list):
+            raise ListingFailed(f"{package} sayfa {page}: {status}")
+        if not body:
+            return out
         out += body
-    return out
+    raise ListingFailed(f"{package}: 2000 surumden fazlasi -- liste tam okunamadi")
+
+
+def manifest(org: str, package: str, ref: str, token: str) -> dict[str, Any]:
+    # The registry takes the same classic token, base64-encoded.
+    req = urllib.request.Request(
+        f"{REGISTRY}/v2/{org}/{package}/manifests/{ref}",
+        headers={
+            "Authorization": f"Bearer {base64.b64encode(token.encode()).decode()}",
+            "Accept": MANIFEST_TYPES,
+            "User-Agent": "ghcr-prune",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read())
+    except (urllib.error.URLError, ValueError) as exc:
+        raise ListingFailed(f"{package}@{ref}: {exc}") from exc
 
 
 def tags_of(version: dict[str, Any]) -> list[str]:
@@ -144,11 +223,12 @@ def tags_of(version: dict[str, Any]) -> list[str]:
 
 
 def prunable(
-    version_list: list[dict[str, Any]], protected: set[str], keep: int
+    version_list: list[dict[str, Any]], protected: set[str], keep: int, releases: bool = True
 ) -> list[dict[str, Any]]:
     """Tagged versions that no rule protects, newest first already removed.
 
-    Untagged versions are not candidates at all -- they are never returned.
+    Untagged versions are never returned here -- see `orphans`. `releases`
+    False drops rule 2 (a mirrored package's release tags live in the mirror).
     """
     tagged = [v for v in version_list if tags_of(v)]
     tagged.sort(key=lambda v: v["created_at"], reverse=True)
@@ -159,10 +239,63 @@ def prunable(
         names = tags_of(version)
         if any(t in protected for t in names):
             continue
-        if any(t.startswith("v") for t in names):
+        if releases and any(t.startswith("v") for t in names):
             continue
         out.append(version)
     return out
+
+
+def reachable(fetch, survivors: list[dict[str, Any]]) -> set[str]:
+    """Every digest a surviving tagged version reaches: itself and its children.
+
+    `fetch` raises on a failed read; the caller must then skip the orphan pass.
+    """
+    seen: set[str] = set()
+    for version in survivors:
+        seen.add(version["name"])
+        for child in fetch(version["name"]).get("manifests") or []:
+            seen.add(child["digest"])
+    return seen
+
+
+def orphans(
+    version_list: list[dict[str, Any]],
+    reached: set[str],
+    fetch,
+    now: dt.datetime,
+    min_age: dt.timedelta,
+) -> list[dict[str, Any]]:
+    """Untagged versions nothing surviving reaches, older than `min_age`.
+
+    A manifest whose `subject` is reached (an OCI referrer -- a signature or an
+    SBOM attached by digest) is kept, and so is one that cannot be read.
+    """
+    out = []
+    for version in version_list:
+        if tags_of(version) or version["name"] in reached:
+            continue
+        created = dt.datetime.fromisoformat(version["created_at"].replace("Z", "+00:00"))
+        if now - created < min_age:
+            continue
+        try:
+            subject = (fetch(version["name"]).get("subject") or {}).get("digest")
+        except ListingFailed:
+            continue
+        if subject in reached:
+            continue
+        out.append(version)
+    return out
+
+
+def _delete(org: str, package: str, version: dict[str, Any], token: str) -> bool:
+    status, _ = _api(
+        f"/orgs/{org}/packages/container/{package}/versions/{version['id']}",
+        token,
+        method="DELETE",
+    )
+    # Counted from the response. A counter that counts intentions reports a
+    # clean sweep through 403s -- measured, 2026-09-22.
+    return status in (204, 200)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -174,8 +307,15 @@ def main(argv: list[str] | None = None) -> int:
         help="path to a checkout of the repository that declares what is deployed",
     )
     ap.add_argument("--keep", type=int, default=10, help="newest tagged versions kept per package")
+    ap.add_argument("--mirror", help="registry host whose packages are served from there")
+    ap.add_argument("--keep-mirrored", type=int, default=2)
+    ap.add_argument("--orphan-age-hours", type=int, default=24)
     ap.add_argument("--execute", action="store_true", help="delete (default: dry run)")
     args = ap.parse_args(argv)
+    if args.keep < 1 or args.keep_mirrored < 1:
+        # keep=0 lets a package lose every tag, and Flux reads tags from here.
+        print("--keep ve --keep-mirrored en az 1", file=sys.stderr)
+        return 2
 
     token = os.environ.get("GITHUB_TOKEN", "")
     if not token:
@@ -194,42 +334,70 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     print(f"{len(protected)} tag korunuyor (kaynak: {root})")
 
+    mirrored = mirrored_packages(root, args.mirror) if args.mirror else set()
+    if args.mirror:
+        print(f"{args.mirror} aynasindan cekilen: {', '.join(sorted(mirrored)) or '(yok)'}")
+
     names = packages(args.org, token)
     if not names:
         print("DURDU: paket listesi bos -- yetki ya da org adi", file=sys.stderr)
         return 2
-    print(f"{len(names)} paket taraniyor, her pakette en yeni {args.keep} etiketli surum kaliyor\n")
+    print(
+        f"{len(names)} paket taraniyor: en yeni {args.keep} etiketli surum kaliyor"
+        f" (aynalilarda {args.keep_mirrored}, v* muafiyeti yok);"
+        f" {args.orphan_age_hours} saatten eski yetimler siliniyor\n"
+    )
 
-    total_seen = 0
-    total_done = 0
+    now = dt.datetime.now(dt.timezone.utc)
+    min_age = dt.timedelta(hours=args.orphan_age_hours)
+    total_seen = total_done = 0
+    skipped: list[str] = []
     for name in sorted(names):
         version_list = versions(args.org, name, token)
-        candidates = prunable(version_list, protected, args.keep)
+        is_mirrored = name in mirrored
+        tagged = prunable(
+            version_list,
+            protected,
+            args.keep_mirrored if is_mirrored else args.keep,
+            releases=not is_mirrored,
+        )
+        gone = {v["id"] for v in tagged}
+        survivors = [v for v in version_list if tags_of(v) and v["id"] not in gone]
+        cache: dict[str, dict[str, Any]] = {}
+
+        def fetch(ref: str, _name: str = name) -> dict[str, Any]:
+            if ref not in cache:
+                cache[ref] = manifest(args.org, _name, ref, token)
+            return cache[ref]
+
+        try:
+            lost = orphans(version_list, reachable(fetch, survivors), fetch, now, min_age)
+        except ListingFailed as exc:
+            lost = []
+            skipped.append(f"{name} ({exc})")
+        candidates = tagged + lost
         if not candidates:
             continue
         total_seen += len(candidates)
+        label = f"{name}{' [ayna]' if is_mirrored else ''}"
         if not args.execute:
-            print(f"  {name}: {len(candidates)} silinecek ({len(version_list)} surum icinde)")
+            print(f"  {label}: {len(tagged)} etiketli + {len(lost)} yetim silinecek"
+                  f" ({len(version_list)} surum icinde)")
             continue
-        done = 0
-        for version in candidates:
-            status, _ = _api(
-                f"/orgs/{args.org}/packages/container/{name}/versions/{version['id']}",
-                token,
-                method="DELETE",
-            )
-            # Counted from the response. A counter that counts intentions
-            # reports a clean sweep through 403s -- measured, 2026-09-22.
-            done += status in (204, 200)
+        # Tagged first: its children join the orphans only once it is gone.
+        done = sum(_delete(args.org, name, v, token) for v in candidates)
         total_done += done
         note = "  <-- HICBIRI SILINMEDI (delete:packages kapsami?)" if done == 0 else ""
-        print(f"  {name}: {done}/{len(candidates)} silindi{note}")
+        print(f"  {label}: {done}/{len(candidates)} silindi"
+              f" ({len(tagged)} etiketli + {len(lost)} yetim){note}")
 
+    for entry in skipped:
+        print(f"  ⚠ yetim taramasi ATLANDI: {entry}")
     if args.execute:
         print(f"\nTOPLAM: {total_done}/{total_seen} surum silindi")
-        return 1 if total_seen and not total_done else 0
+        return 1 if (total_seen and not total_done) or skipped else 0
     print(f"\nTOPLAM: {total_seen} surum silinecek (KURU KOSU)")
-    return 0
+    return 1 if skipped else 0
 
 
 if __name__ == "__main__":
