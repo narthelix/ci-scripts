@@ -63,3 +63,11 @@ jobs:
     uses: ./.github/workflows/secret-scan.yml
     with:
       runner: ubuntu-latest  # public repo -- rationale at the top of this file
+
+  actions-lint:
+    permissions:
+      contents: read
+      pull-requests: write
+    uses: ./.github/workflows/actions-lint.yml
+    with:
+      runner: ubuntu-latest  # public repo -- rationale at the top of this file
