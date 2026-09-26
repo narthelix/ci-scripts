@@ -1,0 +1,117 @@
+# Reusable GitHub Actions security lint — zizmor (MIT), narthelix/muznara#1852.
+#
+# Replaces SonarCloud's githubactions:* rules (SHA pinning, job permissions,
+# template injection, credential persistence) at PR time, with no server and no
+# LOC quota. Public for the same reason as secret-scan.yml (ADR-0097/0099): a
+# public caller cannot reach a private reusable workflow, so `runner` has no
+# default and stays with the caller.
+#
+# ---------------------------------------------------------------------------
+# NEW FINDINGS ONLY, NO BASELINE FILE
+#
+# Measured 2026-09-26 across 27 repos: ~290 existing findings at medium+. A
+# gate that is red on day one everywhere is a gate nobody reads (the lesson of
+# #1516). So on a PR, zizmor's SARIF goes through reviewdog with
+# `-filter-mode=added`: only findings on lines THIS PR adds or changes can fail
+# it, the existing debt stays visible on main and melts through Renovate's
+# SHA-pin PRs and ordinary fixes. Same pattern as Semgrep in the org's
+# python-quality.yml.
+#
+# What fails: zizmor `high` (SARIF `error`). `medium` (SARIF `warning`) is a
+# review comment, not a red check.
+#
+# On push to main the scan runs and REPORTS (job summary) but never fails:
+# main is where the old debt lives, and a permanently red main is noise.
+name: actions-lint
+
+on:
+  workflow_call:
+    inputs:
+      runner:
+        description: >-
+          runs-on value. Plain label or a JSON array as a string. Required: this
+          repository is public and holds no runner labels of its own.
+        required: true
+        type: string
+      zizmor_version:
+        required: false
+        type: string
+        default: '1.30.1'
+      min_severity:
+        required: false
+        type: string
+        default: 'medium'
+
+jobs:
+  zizmor:
+    runs-on: ${{ startsWith(inputs.runner, '[') && fromJSON(inputs.runner) || inputs.runner }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # reviewdog writes the findings as PR review comments.
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: zizmor kurulum
+        env:
+          ZIZMOR_VERSION: ${{ inputs.zizmor_version }}
+        run: |
+          python3 -m venv "$RUNNER_TEMP/zizmor"
+          "$RUNNER_TEMP/zizmor/bin/pip" install --quiet "zizmor==${ZIZMOR_VERSION}"
+          echo "$RUNNER_TEMP/zizmor/bin" >> "$GITHUB_PATH"
+
+      # The org policy, unless the repo ships its own `.github/zizmor.yml`.
+      # `narthelix/*` is `any`: our reusable workflows are called at @main on
+      # purpose (ADR-0099) — the same exception the org Renovate preset makes.
+      # Everything else must be SHA-pinned (Renovate pins it for you).
+      - name: zizmor ayarı
+        run: |
+          if [ -f .github/zizmor.yml ]; then
+            echo "ZIZMOR_CONFIG=.github/zizmor.yml" >> "$GITHUB_ENV"
+          else
+            cat > "$RUNNER_TEMP/zizmor.yml" <<'YAML'
+          rules:
+            unpinned-uses:
+              config:
+                policies:
+                  "narthelix/*": any
+                  "*": hash-pin
+          YAML
+            echo "ZIZMOR_CONFIG=$RUNNER_TEMP/zizmor.yml" >> "$GITHUB_ENV"
+          fi
+
+      - name: reviewdog kurulum (PR)
+        if: github.event_name == 'pull_request'
+        uses: reviewdog/action-setup@38a8d76742a75eeb6c6ffc616bde64179fd09ebf # v1.5.0
+        with:
+          reviewdog_version: v0.21.0
+
+      - name: zizmor (PR — yalnız eklenen satırlar)
+        if: github.event_name == 'pull_request'
+        env:
+          REVIEWDOG_GITHUB_API_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
+          MIN_SEVERITY: ${{ inputs.min_severity }}
+        run: |
+          # zizmor exits non-zero when it finds anything; reviewdog decides.
+          set +o pipefail
+          zizmor --config "$ZIZMOR_CONFIG" --format sarif --min-severity "$MIN_SEVERITY" .github/ \
+            | reviewdog -f=sarif -name=zizmor -reporter=github-pr-review \
+                -filter-mode=added -fail-level=error
+
+      - name: zizmor (main — rapor, kırmızı değil)
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MIN_SEVERITY: ${{ inputs.min_severity }}
+        run: |
+          {
+            echo '## zizmor — mevcut borç (bilgi)'
+            echo '```'
+            zizmor --config "$ZIZMOR_CONFIG" --format plain --min-severity "$MIN_SEVERITY" .github/ 2>&1 | tail -3 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
