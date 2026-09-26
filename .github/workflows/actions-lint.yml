@@ -135,3 +135,136 @@ jobs:
             zizmor --offline --config "$ZIZMOR_CONFIG" --format plain --min-severity "$MIN_SEVERITY" .github/ 2>&1 | tail -3 || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # Dilim 6 (narthelix/muznara#1852): the rest of what SonarCloud flagged in
+  # repo plumbing -- shell scripts, Dockerfiles, and install commands that run
+  # third-party code. Same contract as zizmor above: only lines THIS PR adds can
+  # fail it. Baselines measured 2026-09-26: shellcheck 8, hadolint 6,
+  # install-scripts 8 across the fleet.
+  #
+  # ⚠ Tools come as pinned, sha256-checked release binaries for the runner's
+  # own arch -- never the system package manager. MEASURED the same day: the
+  # israel self-hosted runners have no `ensurepip`, and this workflow's first
+  # version went red in 25 repos because it trusted the system python3.
+  repo-lint:
+    runs-on: ${{ startsWith(inputs.runner, '[') && fromJSON(inputs.runner) || inputs.runner }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: araclar (shellcheck, hadolint, semgrep)
+        run: |
+          set -euo pipefail
+          bin="$RUNNER_TEMP/bin"; mkdir -p "$bin"; cd "$RUNNER_TEMP"
+          case "$(uname -m)" in
+            aarch64|arm64)
+              sc=shellcheck-v0.11.0.linux.aarch64.tar.gz; sc_sha=68a8133197a50beb8803f8d42f9908d1af1c5540d4bb05fdfca8c1fa47decefc
+              hl=hadolint-linux-arm64; hl_sha=331f1d3511b84a4f1e3d18d52fec284723e4019552f4f47b19322a53ce9a40ed ;;
+            x86_64)
+              sc=shellcheck-v0.11.0.linux.x86_64.tar.gz; sc_sha=b7af85e41cc99489dcc21d66c6d5f3685138f06d34651e6d34b42ec6d54fe6f6
+              hl=hadolint-linux-x86_64; hl_sha=6bf226944684f56c84dd014e8b979d27425c0148f61b3bd99bcc6f39e9dc5a47 ;;
+            *) echo "::error::desteklenmeyen mimari $(uname -m)"; exit 1 ;;
+          esac
+          curl -fsSL -o "$sc" "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/$sc"
+          curl -fsSL -o "$hl" "https://github.com/hadolint/hadolint/releases/download/v2.14.0/$hl"
+          echo "$sc_sha  $sc" | sha256sum -c -
+          echo "$hl_sha  $hl" | sha256sum -c -
+          tar -xzf "$sc" && mv shellcheck-v0.11.0/shellcheck "$bin/"
+          install -m 0755 "$hl" "$bin/hadolint"
+          python3 -m venv "$RUNNER_TEMP/sg" && "$RUNNER_TEMP/sg/bin/pip" install --quiet --only-binary :all: semgrep==1.177.0
+          ln -s "$RUNNER_TEMP/sg/bin/semgrep" "$bin/semgrep"
+          echo "$bin" >> "$GITHUB_PATH"
+
+      - uses: reviewdog/action-setup@d8a7baabd7f3e8544ee4dbde3ee41d0011c3a93f # v1.5.0
+        with:
+          reviewdog_version: v0.21.0
+
+      # Every tool writes a report file first and is checked for its OWN
+      # failure before reviewdog sees it -- a tool that crashed must not read
+      # as "no findings" (the zizmor lesson, v0.7.1).
+      - name: shellcheck
+        id: sc
+        continue-on-error: true
+        env:
+          REVIEWDOG_GITHUB_API_TOKEN: ${{ github.token }}
+        run: |
+          mapfile -t files < <(git ls-files '*.sh' '*.bash')
+          [ "${#files[@]}" -eq 0 ] && { echo "shell script yok"; exit 0; }
+          rc=0; shellcheck -S warning -f checkstyle "${files[@]}" > "$RUNNER_TEMP/sc.xml" || rc=$?
+          # 0 = temiz, 1 = bulgu var; digeri shellcheck'in kendi hatasi.
+          [ "$rc" -gt 1 ] && { echo "::error title=shellcheck calismadi::exit $rc"; exit "$rc"; }
+          reviewdog -f=checkstyle -name=shellcheck -reporter=github-pr-review \
+            -filter-mode=added -fail-level=warning < "$RUNNER_TEMP/sc.xml"
+
+      # DL3008 (pin apt package versions) is ignored on purpose: Debian drops
+      # old versions from its mirrors, so a pinned `apt-get install x=1.2` breaks
+      # the build on its own clock. The base image digest is the pin that holds.
+      - name: hadolint
+        id: hl
+        continue-on-error: true
+        env:
+          REVIEWDOG_GITHUB_API_TOKEN: ${{ github.token }}
+        run: |
+          mapfile -t files < <(git ls-files | grep -E '(^|/)Dockerfile[^/]*$' || true)
+          [ "${#files[@]}" -eq 0 ] && { echo "Dockerfile yok"; exit 0; }
+          rc=0; hadolint --ignore DL3008 --no-fail -f checkstyle "${files[@]}" > "$RUNNER_TEMP/hl.xml" || rc=$?
+          [ "$rc" -ne 0 ] && { echo "::error title=hadolint calismadi::exit $rc"; exit "$rc"; }
+          reviewdog -f=checkstyle -name=hadolint -reporter=github-pr-review \
+            -filter-mode=added -fail-level=warning < "$RUNNER_TEMP/hl.xml"
+
+      # Line-level regex rules (generic language). Known limit, accepted: a flag
+      # continued on the NEXT line (`npm ci \` / `  --ignore-scripts`) reads as
+      # missing -- keep the flag on the same line.
+      - name: install-scripts (semgrep)
+        id: is
+        continue-on-error: true
+        env:
+          REVIEWDOG_GITHUB_API_TOKEN: ${{ github.token }}
+        run: |
+          cat > "$RUNNER_TEMP/install-scripts.yml" <<'YAML'
+          rules:
+            - id: npm-install-runs-scripts
+              languages: [generic]
+              severity: ERROR
+              message: >-
+                `npm ci` / `npm install` runs every dependency's install script. Add
+                `--ignore-scripts` (SonarCloud S6505's replacement, narthelix/muznara#1852).
+              paths:
+                include: ["**/Dockerfile*", ".github/workflows/*.yml", ".github/workflows/*.yaml"]
+              pattern-regex: '(?m)^(?![ \t]*#)[^\n]*\bnpm[ \t]+(ci|install|i)\b(?![^\n]*--ignore-scripts)(?![^\n]*`)[^\n]*$'
+            - id: pip-install-builds-sdists
+              languages: [generic]
+              severity: ERROR
+              message: >-
+                A third-party `pip install` may build an sdist and run its setup code.
+                Use `--only-binary :all:` (SonarCloud S8541's replacement,
+                narthelix/muznara#1852). Installing THIS project (`.`, `-e`) or a
+                hash-pinned requirements file is fine.
+              paths:
+                include: ["**/Dockerfile*", ".github/workflows/*.yml", ".github/workflows/*.yaml"]
+              pattern-regex: '(?m)^(?![ \t]*#)[^\n]*\bpip3?[ \t]+install\b(?![^\n]*(--only-binary|--require-hashes|[ \t]-e[ \t]|[ \t]\.([ \t]|$|\[)|`))[^\n]*$'
+          YAML
+          rc=0; semgrep scan --config "$RUNNER_TEMP/install-scripts.yml" --metrics off --sarif --quiet . > "$RUNNER_TEMP/is.sarif" || rc=$?
+          [ "$rc" -ne 0 ] && { echo "::error title=semgrep calismadi::exit $rc"; exit "$rc"; }
+          reviewdog -f=sarif -name=install-scripts -reporter=github-pr-review \
+            -filter-mode=added -fail-level=error < "$RUNNER_TEMP/is.sarif"
+
+      - name: sonuc
+        if: always()
+        env:
+          SC: ${{ steps.sc.outcome }}
+          HL: ${{ steps.hl.outcome }}
+          IS: ${{ steps.is.outcome }}
+        run: |
+          echo "shellcheck=$SC hadolint=$HL install-scripts=$IS"
+          [ "$SC" = success ] && [ "$HL" = success ] && [ "$IS" = success ]
