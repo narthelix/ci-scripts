@@ -165,6 +165,16 @@ jobs:
       - name: araclar (shellcheck, hadolint, semgrep)
         run: |
           set -euo pipefail
+          # The israel runner image carries these at the same versions
+          # (infra-runners, narthelix/muznara#1852) -- no download there. Any
+          # other runner (hosted x64, a stale image) falls through to the
+          # pinned, sha256-checked download below.
+          if shellcheck --version 2>/dev/null | grep -q 'version: 0.11.0' \
+             && hadolint --version 2>/dev/null | grep -q ' 2.14.0' \
+             && semgrep --version 2>/dev/null | grep -qx '1.177.0'; then
+            echo "araclar imajda (shellcheck 0.11.0, hadolint 2.14.0, semgrep 1.177.0) -- indirme yok"
+            exit 0
+          fi
           bin="$RUNNER_TEMP/bin"; mkdir -p "$bin"; cd "$RUNNER_TEMP"
           case "$(uname -m)" in
             aarch64|arm64)
