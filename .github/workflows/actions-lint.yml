@@ -56,6 +56,14 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
 
+      # ⚠ setup-python ZORUNLU, sistem python3'une guvenilmez -- OLCULDU 2026-09-26:
+      # israel self-hosted runner'larda `python3 -m venv` "ensurepip is not
+      # available" ile dustu ve v0.7.0 ilk gun 25 cagiranin hepsinde kirmiziydi
+      # (hosted ubuntu-latest'te gecti, o yuzden ci-scripts'in kendi CI'i gormedi).
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
       - name: zizmor kurulum
         env:
           ZIZMOR_VERSION: ${{ inputs.zizmor_version }}
