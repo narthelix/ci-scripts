@@ -86,7 +86,7 @@ jobs:
 
       - name: reviewdog kurulum (PR)
         if: github.event_name == 'pull_request'
-        uses: reviewdog/action-setup@38a8d76742a75eeb6c6ffc616bde64179fd09ebf # v1.5.0
+        uses: reviewdog/action-setup@d8a7baabd7f3e8544ee4dbde3ee41d0011c3a93f # v1.5.0
         with:
           reviewdog_version: v0.21.0
 
