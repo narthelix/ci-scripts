@@ -27,6 +27,7 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5  # NEGATIF KONTROL — geri alinacak
       # Stdlib only, by design: this is fetched and run by every repo's CI, so
       # a dependency here becomes a dependency everywhere -- and a supply-chain
       # surface on a tool that reads our documents.
