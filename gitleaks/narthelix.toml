@@ -1,0 +1,19 @@
+# Narthelix's own secret formats -- rules gitleaks' defaults do not have.
+#
+# ONE owner, two readers: the reusable `secret-scan.yml` (CI) and the
+# workspace's `scripts/hooks/pre-push` (local) both EXTEND the repo's own
+# `.gitleaks.toml` with this file, so a repo's calibration and these rules
+# always travel together. This file holds [[rules]] only -- no [extend], no
+# [allowlist]; the reader writes the [extend] line that points at the repo.
+#
+# Measured before this file existed (2026-09-26, gitleaks 8.30.1, narthelix/muznara#1844):
+# a real `nlx_` key placed in source, in an `Authorization:` header and in an
+# `.env` file -> "no leaks found" under the default rules, while a fake AWS
+# key in the same repo was found (the negative control). With the rule below:
+# all three found.
+
+[[rules]]
+id = "narthelix-api-key"
+description = "Narthelix developer API key: nlx_ + 65 Base62 (16 id + 43 secret + 6 CRC32)"
+regex = '''\bnlx_[0-9A-Za-z]{65}\b'''
+keywords = ["nlx_"]
