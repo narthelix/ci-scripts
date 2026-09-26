@@ -102,24 +102,36 @@ jobs:
         if: github.event_name == 'pull_request'
         env:
           REVIEWDOG_GITHUB_API_TOKEN: ${{ github.token }}
-          GH_TOKEN: ${{ github.token }}
           MIN_SEVERITY: ${{ inputs.min_severity }}
         run: |
-          # zizmor exits non-zero when it finds anything; reviewdog decides.
-          set +o pipefail
-          zizmor --config "$ZIZMOR_CONFIG" --format sarif --min-severity "$MIN_SEVERITY" .github/ \
-            | reviewdog -f=sarif -name=zizmor -reporter=github-pr-review \
-                -filter-mode=added -fail-level=error
+          # ⚠ `--offline`, MEASURED 2026-09-26: the online audits (ref-confusion &c.)
+          # list branches of every repo a workflow calls, and a caller's token cannot
+          # read the private narthelix/.github -- zizmor died with "no audit was
+          # performed" on every caller. Known-vulnerable action versions, the main
+          # online value, already come from Renovate's security alerts.
+          #
+          # ⚠ The tool failing is NOT "no findings": in SARIF mode zizmor exits 0
+          # with findings too (measured), so any non-zero exit is zizmor itself
+          # breaking. Piped straight into reviewdog that read as "parse error: EOF"
+          # -- a red that explains nothing. It is caught and named here instead.
+          rc=0
+          zizmor --offline --config "$ZIZMOR_CONFIG" --format sarif --min-severity "$MIN_SEVERITY" .github/ \
+            > "$RUNNER_TEMP/zizmor.sarif" || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "::error title=zizmor calismadi::zizmor exit $rc -- arac hatasi, bulgu degil (log'a bak)"
+            exit "$rc"
+          fi
+          reviewdog -f=sarif -name=zizmor -reporter=github-pr-review \
+            -filter-mode=added -fail-level=error < "$RUNNER_TEMP/zizmor.sarif"
 
       - name: zizmor (main — rapor, kırmızı değil)
         if: github.event_name != 'pull_request'
         env:
-          GH_TOKEN: ${{ github.token }}
           MIN_SEVERITY: ${{ inputs.min_severity }}
         run: |
           {
             echo '## zizmor — mevcut borç (bilgi)'
             echo '```'
-            zizmor --config "$ZIZMOR_CONFIG" --format plain --min-severity "$MIN_SEVERITY" .github/ 2>&1 | tail -3 || true
+            zizmor --offline --config "$ZIZMOR_CONFIG" --format plain --min-severity "$MIN_SEVERITY" .github/ 2>&1 | tail -3 || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
