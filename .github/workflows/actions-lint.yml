@@ -121,6 +121,16 @@ jobs:
             echo "::error title=zizmor calismadi::zizmor exit $rc -- arac hatasi, bulgu degil (log'a bak)"
             exit "$rc"
           fi
+          # ⚠ PRs over 300 files: GitHub's diff API refuses them (406), and
+          # reviewdog falls back to its own `git fetch` -- which has no credentials,
+          # because checkout runs with `persist-credentials: false`. Measured on
+          # narthelix/design#1 (452 files): zizmor and repo-lint both died with
+          # "could not read Username". The token is handed to git through
+          # environment-only config for this step: it never reaches .git/config,
+          # so the persist-credentials decision stands.
+          _auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$REVIEWDOG_GITHUB_API_TOKEN" | base64 | tr -d '\n')"
+          echo "::add-mask::$_auth"
+          export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.https://github.com/.extraheader" GIT_CONFIG_VALUE_0="$_auth"
           reviewdog -f=sarif -name=zizmor -reporter=github-pr-review \
             -filter-mode=added -fail-level=error < "$RUNNER_TEMP/zizmor.sarif"
 
@@ -213,6 +223,10 @@ jobs:
           rc=0; shellcheck -S warning -f checkstyle "${files[@]}" > "$RUNNER_TEMP/sc.xml" || rc=$?
           # 0 = temiz, 1 = bulgu var; digeri shellcheck'in kendi hatasi.
           [ "$rc" -gt 1 ] && { echo "::error title=shellcheck calismadi::exit $rc"; exit "$rc"; }
+          # Credentials for reviewdog's own `git fetch` on 300+ file PRs (see zizmor step).
+          _auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$REVIEWDOG_GITHUB_API_TOKEN" | base64 | tr -d '\n')"
+          echo "::add-mask::$_auth"
+          export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.https://github.com/.extraheader" GIT_CONFIG_VALUE_0="$_auth"
           reviewdog -f=checkstyle -name=shellcheck -reporter=github-pr-review \
             -filter-mode=added -fail-level=warning < "$RUNNER_TEMP/sc.xml"
 
@@ -229,6 +243,10 @@ jobs:
           [ "${#files[@]}" -eq 0 ] && { echo "Dockerfile yok"; exit 0; }
           rc=0; hadolint --ignore DL3008 --no-fail -f checkstyle "${files[@]}" > "$RUNNER_TEMP/hl.xml" || rc=$?
           [ "$rc" -ne 0 ] && { echo "::error title=hadolint calismadi::exit $rc"; exit "$rc"; }
+          # Credentials for reviewdog's own `git fetch` on 300+ file PRs (see zizmor step).
+          _auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$REVIEWDOG_GITHUB_API_TOKEN" | base64 | tr -d '\n')"
+          echo "::add-mask::$_auth"
+          export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.https://github.com/.extraheader" GIT_CONFIG_VALUE_0="$_auth"
           reviewdog -f=checkstyle -name=hadolint -reporter=github-pr-review \
             -filter-mode=added -fail-level=warning < "$RUNNER_TEMP/hl.xml"
 
@@ -266,6 +284,10 @@ jobs:
           YAML
           rc=0; semgrep scan --config "$RUNNER_TEMP/install-scripts.yml" --metrics off --sarif --quiet . > "$RUNNER_TEMP/is.sarif" || rc=$?
           [ "$rc" -ne 0 ] && { echo "::error title=semgrep calismadi::exit $rc"; exit "$rc"; }
+          # Credentials for reviewdog's own `git fetch` on 300+ file PRs (see zizmor step).
+          _auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$REVIEWDOG_GITHUB_API_TOKEN" | base64 | tr -d '\n')"
+          echo "::add-mask::$_auth"
+          export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.https://github.com/.extraheader" GIT_CONFIG_VALUE_0="$_auth"
           reviewdog -f=sarif -name=install-scripts -reporter=github-pr-review \
             -filter-mode=added -fail-level=error < "$RUNNER_TEMP/is.sarif"
 
