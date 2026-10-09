@@ -14,13 +14,13 @@ pointer to where the rule actually lives.
 2. **`CONVENTIONS.md` in `narthelix/handbook`** — the org's working rules. Its
    own first line: *"a human, Claude Code, or any other agent reading this file
    sees the same rules."*
-3. **`specs/technical/build_state.md` in `narthelix/muznara`** — the ledger:
+3. **`specs/technical/build_state.md` in `narthelix/ops`** — the ledger:
    where the work actually stands. Read it before choosing what to do next. If
    it and anything else disagree, the ledger wins.
 
 Those last two are **other repositories**. `narthelix/workspace` clones every
 org repo side by side, so from inside one of them they are `../handbook/` and
-`../muznara/`. Opening a single repo as your editor's folder puts them outside
+`../ops/`. Opening a single repo as your editor's folder puts them outside
 it — read them from the terminal, or open the workspace directory instead so
 that one session sees all of them.
 
@@ -74,6 +74,6 @@ it is the ledger, the memory, and git. So, as you go rather than at the end:
   trailing hyphen, or a Turkish diacritic (ş/ğ/ı/ö/ü/ç) fails the required
   check while reading correctly. `mani run install-hooks` in the workspace
   rejects a bad name before the push instead of after the red PR.
-- **Issues for every repo live in `narthelix/muznara`**, not the repo you are
+- **Issues for every repo live in `narthelix/ops`**, not the repo you are
   in. The issue number rides in the **branch name**; a bare `#N` in the PR body
   would resolve against the wrong tracker, so most repos do not require one.
