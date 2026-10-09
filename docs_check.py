@@ -13,7 +13,7 @@ Two checks:
    fail as such: they resolve in a side-by-side workspace checkout, but are
    broken in GitHub's renderer and unverifiable in CI, which checks out one
    repository. The convention is an absolute URL with the path written beside it
-   in inline code, so a browser reader and an editor/Obsidian reader each get a
+   in inline code, so a browser reader and an editor reader each get a
    working affordance.
 2. **Ledger budget.** An entry-state document has a byte budget. Crossing it is
    not an error in itself — it is a prompt to decide, so the message says so.
@@ -114,8 +114,8 @@ def check_links(root: pathlib.Path) -> list[str]:
                         "           the ledger (`muznara/specs/technical/build_state.md`) "
                         "— [on GitHub](https://github.com/narthelix/muznara/blob/main/...)\n"
                         "           The link works in a browser and in CI; the "
-                        "inline-code path stays a jump target in an editor or "
-                        "Obsidian (and inline code is not checked)."
+                        "inline-code path stays a jump target in an editor "
+                        "(and inline code is not checked)."
                     )
                     continue
 
