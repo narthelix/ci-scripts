@@ -36,9 +36,17 @@ ASK_PATTERNS: list[tuple[str, str]] = [
     (r"(^|/)[^/]*(openapi[^/]*external|external[^/]*openapi)[^/]*\.(json|ya?ml)$", "external API contract"),
     (r"(^|/)\.sops\.ya?ml$|\.enc\.(ya?ml|json|env)$", "encrypted secret"),
 ]
+# Words found in real security code across the fleet that the first list
+# missed (narthelix/ops#2039, measured 2026-10-10): `security/password.py`,
+# `security/permissions.py`, `authentik_jwt.py`, `api_key_resolver.py`,
+# `app_check.py`, `id_token.py`, `webhooks/signing.py`, `url_guard.py`,
+# `livekit_token.py` -- all came out Show. A false Ask (design `tokens/`)
+# costs one founder click; a false Show ships security code unreviewed.
 NAMED_ASK = (
-    r"(^|/|_|-)(auth|authn|authz|authentication|authorization|oauth|oidc"
-    r"|payments?|billing|secrets?)(/|_|-|\.)"
+    r"(^|/|_|-)(auth|authn|authz|authentication|authorization|oauth|oidc|authentik"
+    r"|payments?|billing|secrets?|security|jwt|password|passwords|permissions?"
+    r"|api[_-]?keys?|signing|signature|attestation|app[_-]?check|id[_-]?token"
+    r"|tokens?|url[_-]?guard|webhooks?|crypto|encryption)(/|_|-|\.)"
 )
 
 DOC = re.compile(r"\.(md|mdx|rst|txt)$|(^|/)docs?/|\.(png|jpe?g|gif|svg|webp)$", re.I)

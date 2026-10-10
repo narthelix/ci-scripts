@@ -46,6 +46,14 @@ check("sops file → ask", cls([(m, "secrets/db.enc.yaml")]), "ask")
 check("auth test only → ship", cls([(m, "tests/unit/test_auth.py")]), "ship")
 check("billing tests dir → ship", cls([(m, "src/muznara/modules/billing/tests/unit/test_x.py")]), "ship")
 check("migration test still ask", cls([(m, "migrations/versions/0001.py")]), "ask")
+for path in ["src/narthelix_platform/security/authentik_jwt.py", "src/muznara/platform/security/password.py",
+             "src/muznara/platform/security/permissions.py", "src/narthelix_platform/security/api_key_resolver.py",
+             "src/narthelix_platform/google/id_token.py", "src/narthelix_platform/webhooks/signing.py",
+             "src/narthelix_platform/webhooks/url_guard.py", "src/muznara/platform/realtime/livekit_token.py",
+             "src/narthelix_backend/developers/authentik.py", "src/narthelix_backend/webhooks.py"]:
+    check(f"security path → ask: {path}", cls([(m, path)]), "ask")
+check("tokenizer is not token", cls([(m, "src/nlp/tokenizer.py")]), "show")
+check("security test → ship", cls([(m, "tests/unit/security/test_password.py")]), "ship")
 check("author.py is not auth", cls([(m, "src/author.py")]), "show")
 check("identity misses generic rule", cls([(m, "src/muznara/modules/identity/x.py")]), "show")
 check("identity via caller rule → ask",
