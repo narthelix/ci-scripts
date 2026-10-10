@@ -76,6 +76,11 @@ on:
         required: false
         type: string
         default: 'ship'
+      merger_client_id:
+        description: Client ID of the merger App (pairs with secrets.merger_private_key).
+        required: false
+        type: string
+        default: ''
       risk_script_ref:
         description: >-
           narthelix/ci-scripts commit that risk_class.py is fetched from. A full
@@ -88,6 +93,15 @@ on:
       risk_class:
         description: ship | show | ask (handbook ADR-0128)
         value: ${{ jobs.gate.outputs.risk_class }}
+    secrets:
+      merger_private_key:
+        description: >-
+          Private key of the org's merger GitHub App. When given (with the
+          merger_client_id input), a Ship or Show PR gets auto-merge enabled by
+          that App (ADR-0128 S2). An App token, not GITHUB_TOKEN: a merge made
+          with GITHUB_TOKEN starts no workflow run, so main's deploy would
+          silently never happen. Omitted, nothing is auto-merged.
+        required: false
 
 jobs:
   gate:
@@ -221,3 +235,36 @@ jobs:
             gh pr edit "$NUM" -R "$REPO" --remove-label "risk:$c" >/dev/null 2>&1 || true
           done
           gh pr edit "$NUM" -R "$REPO" --add-label "risk:$cls" >/dev/null || echo "::warning::could not set label risk:$cls"
+
+      # ADR-0128 S2: Ship and Show merge themselves once every required check is
+      # green. Ask is left alone -- only the founder enables a merge there. Bot
+      # PRs are skipped: Renovate and the AI doc flow manage their own
+      # auto-merge. The token is narrowed to this one repository.
+      - name: Mint merger token (Ship / Show)
+        id: merger
+        if: >-
+          github.event_name == 'pull_request' && !github.event.pull_request.draft &&
+          (steps.risk.outputs.class == 'ship' || steps.risk.outputs.class == 'show') &&
+          steps.author.outputs.exempt == 'false' && inputs.merger_client_id != ''
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ inputs.merger_client_id }}
+          private-key: ${{ secrets.merger_private_key }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Enable auto-merge (Ship / Show)
+        if: steps.merger.outputs.token != ''
+        env:
+          GH_TOKEN: ${{ steps.merger.outputs.token }}
+          REPO: ${{ github.repository }}
+          NUM: ${{ github.event.pull_request.number }}
+          CLS: ${{ steps.risk.outputs.class }}
+        run: |
+          if gh pr merge "$NUM" -R "$REPO" --auto --squash --delete-branch; then
+            echo "::notice::risk:${CLS} -- auto-merge enabled; merges when every required check is green"
+          else
+            echo "::warning::could not enable auto-merge (branch protection / allow_auto_merge?)"
+          fi
