@@ -88,7 +88,7 @@ on:
           commit, so the script it runs is pinned here explicitly.
         required: false
         type: string
-        default: '5de05af25d35f4332d7923059054c93a0fa2f04f'  # v0.9.0 merge commit; a squashed branch commit is unreachable
+        default: '7dd62b0eaf90c98b47e0b139d0c741883b5ae4ea'  # v0.11.0 script (security words); a squashed branch commit is unreachable
     outputs:
       risk_class:
         description: ship | show | ask (handbook ADR-0128)
