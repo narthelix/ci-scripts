@@ -49,9 +49,11 @@ jobs:
     if: github.event_name == 'pull_request'
     permissions:
       contents: read
-      pull-requests: read
+      pull-requests: write  # risk:* label (ADR-0128)
     uses: ./.github/workflows/pr-conventions.yml
     with:
+      # Shared CI for every repository: any change here is Ask (ADR-0128).
+      risk_floor: ask
       # Issues live in narthelix/muznara's tracker; the branch name carries the
       # number, and a bare `#N` here would resolve against this repo.
       require_issue_link: false
