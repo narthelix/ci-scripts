@@ -60,18 +60,51 @@ on:
         required: false
         type: string
         default: 'dependabot[bot],renovate[bot]'
+      risk_ask_paths:
+        description: >-
+          Space-separated extra regexes that make a PR Ask (handbook ADR-0128),
+          for what the generic rules cannot know -- e.g. a module that holds
+          auth under another name (`(^|/)identity/`). The values belong to the
+          caller: this repository is public (ADR-0099).
+        required: false
+        type: string
+        default: ''
+      risk_floor:
+        description: >-
+          Lowest class any PR in this repository can get: `ask` for a repo
+          where every change is high blast radius (gitops, infra-terraform).
+        required: false
+        type: string
+        default: 'ship'
+      risk_script_ref:
+        description: >-
+          narthelix/ci-scripts commit that risk_class.py is fetched from. A full
+          SHA, like docs-check's checker_ref: a workflow cannot know its own
+          commit, so the script it runs is pinned here explicitly.
+        required: false
+        type: string
+        default: '32a02b658a9977f6fc7d1d946fe746375e31f1c3'
+    outputs:
+      risk_class:
+        description: ship | show | ask (handbook ADR-0128)
+        value: ${{ jobs.gate.outputs.risk_class }}
 
 jobs:
   gate:
     runs-on: ${{ startsWith(inputs.runner, '[') && fromJSON(inputs.runner) || inputs.runner }}
     timeout-minutes: 5
+    # pull-requests: write is for the risk:* label only (ADR-0128). A caller
+    # pinned to an older SHA keeps working; one that bumps must grant it.
     permissions:
       contents: read
-      pull-requests: read
+      pull-requests: write
+    outputs:
+      risk_class: ${{ steps.risk.outputs.class }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       # Scope gate, computed in shell rather than via a paths-filter template:
       # interpolating a multiline input into the action's `filters:` string
@@ -156,3 +189,35 @@ jobs:
             echo "::error::PR body must reference an issue: 'Closes #N' / 'Refs #N', or the cross-repo form 'Refs owner/repo#N'."
             exit 1
           fi
+
+      # Risk class (handbook ADR-0128): computed from the changed paths, never
+      # chosen by the author. It runs for bot PRs too -- Renovate's own
+      # automerge still governs those, the label only records the class. It
+      # never fails the gate: a labelling error must not turn every PR red.
+      - name: Classify risk (Ship / Show / Ask)
+        id: risk
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUM: ${{ github.event.pull_request.number }}
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+          ASK_PATHS: ${{ inputs.risk_ask_paths }}
+          FLOOR: ${{ inputs.risk_floor }}
+          SCRIPT_SHA: ${{ inputs.risk_script_ref }}
+        run: |
+          set -uo pipefail
+          curl -fsSL "https://raw.githubusercontent.com/narthelix/ci-scripts/${SCRIPT_SHA}/risk_class.py" -o "$RUNNER_TEMP/risk_class.py" || { echo "::warning::risk_class.py could not be fetched"; exit 0; }
+          out=$(gh api "repos/${REPO}/pulls/${NUM}/files" --paginate --jq '.[] | [.status, .filename] | @tsv' \
+            | python3 "$RUNNER_TEMP/risk_class.py" --labels "$LABELS" --ask-paths "$ASK_PATHS" --floor "$FLOOR")
+          cls=$(sed -n 's/^class=//p' <<< "$out")
+          [ -n "$cls" ] || { echo "::warning::risk classification failed"; exit 0; }
+          echo "class=$cls" >> "$GITHUB_OUTPUT"
+          { echo "### Risk class: \`$cls\` (ADR-0128)"; sed -n 's/^reason=/- /p' <<< "$out"; } >> "$GITHUB_STEP_SUMMARY"
+          for c in ship show ask; do
+            gh label create "risk:$c" -R "$REPO" --color "$( [ $c = ask ] && echo d93f0b || ([ $c = show ] && echo fbca04 || echo 0e8a16))" \
+              --description "ADR-0128 risk class, set by pr-conventions" 2>/dev/null || true
+            [ "$c" = "$cls" ] && continue
+            gh pr edit "$NUM" -R "$REPO" --remove-label "risk:$c" >/dev/null 2>&1 || true
+          done
+          gh pr edit "$NUM" -R "$REPO" --add-label "risk:$cls" >/dev/null || echo "::warning::could not set label risk:$cls"
