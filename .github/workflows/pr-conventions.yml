@@ -81,14 +81,6 @@ on:
         required: false
         type: string
         default: ''
-      risk_script_ref:
-        description: >-
-          narthelix/ci-scripts commit that risk_class.py is fetched from. A full
-          SHA, like docs-check's checker_ref: a workflow cannot know its own
-          commit, so the script it runs is pinned here explicitly.
-        required: false
-        type: string
-        default: '7dd62b0eaf90c98b47e0b139d0c741883b5ae4ea'  # v0.11.0 script (security words); a squashed branch commit is unreachable
     outputs:
       risk_class:
         description: ship | show | ask (handbook ADR-0128)
@@ -113,158 +105,42 @@ jobs:
       contents: read
       pull-requests: write
     outputs:
-      risk_class: ${{ steps.risk.outputs.class }}
+      risk_class: ${{ steps.risk.outputs.risk_class }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
           persist-credentials: false
 
-      # Scope gate, computed in shell rather than via a paths-filter template:
-      # interpolating a multiline input into the action's `filters:` string
-      # drops the continuation lines' indentation and produces invalid YAML.
-      # Prefix matching is equivalent for the `specs/`-style exclusions in use.
-      - name: Decide whether this PR is in scope
-        id: scope
-        env:
-          SKIP_PREFIXES: ${{ inputs.skip_paths }}
-          EVENT_NAME: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -euo pipefail
-          if [ -z "${SKIP_PREFIXES// }" ] || [ "$EVENT_NAME" != "pull_request" ]; then
-            echo "in_scope=true" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
-            # Base unreachable (force-push): fail open into scope rather than
-            # silently skipping a gate.
-            echo "in_scope=true" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          in_scope=false
-          while IFS= read -r f; do
-            [ -z "$f" ] && continue
-            skip=false
-            for p in $SKIP_PREFIXES; do
-              case "$f" in "$p"*) skip=true ;; esac
-            done
-            [ "$skip" = true ] || in_scope=true
-          done < <(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
-          echo "in_scope=$in_scope" >> "$GITHUB_OUTPUT"
-
-      - name: Check author exemption
-        id: author
-        env:
-          AUTHOR: ${{ github.event.pull_request.user.login }}
-          EXEMPT: ${{ inputs.exempt_authors }}
-        run: |
-          set -euo pipefail
-          # PR *author*, not github.actor: actor is whoever triggered the event,
-          # so a human editing a bot PR's body would otherwise break the exemption.
-          exempt=false
-          IFS=',' read -ra names <<< "$EXEMPT"
-          for n in "${names[@]}"; do
-            [ "$(echo "$n" | xargs)" = "$AUTHOR" ] && exempt=true
-          done
-          echo "exempt=$exempt" >> "$GITHUB_OUTPUT"
-
-      - name: Check branch name
-        if: steps.author.outputs.exempt == 'false' && steps.scope.outputs.in_scope == 'true'
-        env:
-          BRANCH: ${{ github.head_ref }}
-          PATTERN: ${{ inputs.branch_pattern }}
-        run: |
-          if [[ ! "$BRANCH" =~ $PATTERN ]]; then
-            echo "::error::Branch name '$BRANCH' does not match <type>/<issue-no>-<kebab-description>"
-            echo "Expected pattern: $PATTERN (types: feature, fix, chore, docs, refactor)"
-            exit 1
-          fi
-
-      # An optional `owner/repo` between the keyword and the `#` is ACCEPTED, and
-      # that is the point of the pattern rather than an afterthought.
-      #
-      # The narrow form (`refs[[:space:]]*#N`) rejected `Refs owner/repo#N` — a
-      # reference that renders perfectly inside the tracker repo, which is the
-      # only repo where this check is even on. So the gate was failing a VALID
-      # body and sending the author to rewrite a correct sentence. It bit
-      # repeatedly, most visibly on a fleet-wide sweep whose one shared body was
-      # written in the cross-repo form.
-      #
-      # ⚠ The looser form does not weaken anything: this step only runs where
-      # `require_issue_link` is true, i.e. the repo that owns the tracker. In every
-      # other repo the input is false precisely because a bare `#N` there would
-      # resolve against the wrong repo -- and that reasoning is unchanged.
-      - name: Check PR body links an issue
-        if: inputs.require_issue_link && steps.author.outputs.exempt == 'false' && steps.scope.outputs.in_scope == 'true'
-        env:
-          BODY: ${{ github.event.pull_request.body }}
-        run: |
-          if ! grep -qiE '\b(closes|fixes|resolves|refs)\b[[:space:]]*([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)?#[0-9]+' <<< "$BODY"; then
-            echo "::error::PR body must reference an issue: 'Closes #N' / 'Refs #N', or the cross-repo form 'Refs owner/repo#N'."
-            exit 1
-          fi
-
-      # Risk class (handbook ADR-0128): computed from the changed paths, never
-      # chosen by the author. It runs for bot PRs too -- Renovate's own
-      # automerge still governs those, the label only records the class. It
-      # never fails the gate: a labelling error must not turn every PR red.
-      - name: Classify risk (Ship / Show / Ask)
-        id: risk
-        if: github.event_name == 'pull_request'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          NUM: ${{ github.event.pull_request.number }}
-          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
-          ASK_PATHS: ${{ inputs.risk_ask_paths }}
-          FLOOR: ${{ inputs.risk_floor }}
-          SCRIPT_SHA: ${{ inputs.risk_script_ref }}
-        run: |
-          set -uo pipefail
-          curl -fsSL "https://raw.githubusercontent.com/narthelix/ci-scripts/${SCRIPT_SHA}/risk_class.py" -o "$RUNNER_TEMP/risk_class.py" || { echo "::warning::risk_class.py could not be fetched"; exit 0; }
-          out=$(gh api "repos/${REPO}/pulls/${NUM}/files" --paginate --jq '.[] | [.status, .filename] | @tsv' \
-            | python3 "$RUNNER_TEMP/risk_class.py" --labels "$LABELS" --ask-paths "$ASK_PATHS" --floor "$FLOOR")
-          cls=$(sed -n 's/^class=//p' <<< "$out")
-          [ -n "$cls" ] || { echo "::warning::risk classification failed"; exit 0; }
-          echo "class=$cls" >> "$GITHUB_OUTPUT"
-          { echo "### Risk class: \`$cls\` (ADR-0128)"; sed -n 's/^reason=/- /p' <<< "$out"; } >> "$GITHUB_STEP_SUMMARY"
-          for c in ship show ask; do
-            gh label create "risk:$c" -R "$REPO" --color "$( [ $c = ask ] && echo d93f0b || ([ $c = show ] && echo fbca04 || echo 0e8a16))" \
-              --description "ADR-0128 risk class, set by pr-conventions" 2>/dev/null || true
-            [ "$c" = "$cls" ] && continue
-            gh pr edit "$NUM" -R "$REPO" --remove-label "risk:$c" >/dev/null 2>&1 || true
-          done
-          gh pr edit "$NUM" -R "$REPO" --add-label "risk:$cls" >/dev/null || echo "::warning::could not set label risk:$cls"
-
-      # ADR-0128 S2: Ship and Show merge themselves once every required check is
-      # green. Ask is left alone -- only the founder enables a merge there. Bot
-      # PRs are skipped: Renovate and the AI doc flow manage their own
-      # auto-merge. The token is narrowed to this one repository.
-      - name: Mint merger token (Ship / Show)
-        id: merger
-        if: >-
-          github.event_name == 'pull_request' && !github.event.pull_request.draft &&
-          (steps.risk.outputs.class == 'ship' || steps.risk.outputs.class == 'show') &&
-          steps.author.outputs.exempt == 'false' && inputs.merger_client_id != ''
-        continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+      # The steps live in `actions/` (narthelix/ops#2050), shared with
+      # gates.yml; taken from this workflow's own commit, so a caller pinned to
+      # a SHA gets that SHA's checks.
+      - name: ci-scripts at this workflow's commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          client-id: ${{ inputs.merger_client_id }}
-          private-key: ${{ secrets.merger_private_key }}
-          repositories: ${{ github.event.repository.name }}
-          permission-contents: write
-          permission-pull-requests: write
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .narthelix-ci-scripts
+          sparse-checkout: |
+            actions
+            gitleaks
+          persist-credentials: false
 
-      - name: Enable auto-merge (Ship / Show)
-        if: steps.merger.outputs.token != ''
-        env:
-          GH_TOKEN: ${{ steps.merger.outputs.token }}
-          REPO: ${{ github.repository }}
-          NUM: ${{ github.event.pull_request.number }}
-          CLS: ${{ steps.risk.outputs.class }}
-        run: |
-          if gh pr merge "$NUM" -R "$REPO" --auto --squash --delete-branch; then
-            echo "::notice::risk:${CLS} -- auto-merge enabled; merges when every required check is green"
-          else
-            echo "::warning::could not enable auto-merge (branch protection / allow_auto_merge?)"
-          fi
+      - name: pr-conventions
+        id: conventions
+        uses: ./.narthelix-ci-scripts/actions/pr-conventions
+        with:
+          skip_paths: ${{ inputs.skip_paths }}
+          require_issue_link: ${{ inputs.require_issue_link }}
+          branch_pattern: ${{ inputs.branch_pattern }}
+          exempt_authors: ${{ inputs.exempt_authors }}
+
+      - name: risk
+        id: risk
+        uses: ./.narthelix-ci-scripts/actions/risk
+        with:
+          risk_ask_paths: ${{ inputs.risk_ask_paths }}
+          risk_floor: ${{ inputs.risk_floor }}
+          exempt: ${{ steps.conventions.outputs.exempt }}
+          merger_client_id: ${{ inputs.merger_client_id }}
+          merger_private_key: ${{ secrets.merger_private_key }}

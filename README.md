@@ -54,6 +54,27 @@ turns every repo's PRs red at once. The version stays legible in a comment.
       runner: ubuntu-latest   # required — see the scope lock above
 ```
 
+### `gates.yml` — every gate in one job (narthelix/ops#2050)
+
+`gates.yml` runs pr-conventions, secret-scan, zizmor and repo-lint as steps of
+**one** job, then the risk class last. Measured 2026-10-11: CI queue time is
+backlog, and each gate as its own job put four short jobs per PR into it.
+Ordering also means a red check never enables auto-merge.
+
+The checks live once, as composite actions in `actions/`; `gates.yml` and the
+per-check workflows both run them, taken from the workflow's own commit
+(`job.workflow_sha`), so the SHA a caller pins still decides which checks run.
+The required check becomes `gates / gate`.
+
+```yaml
+  gates:
+    permissions: { contents: read, pull-requests: write }
+    uses: narthelix/ci-scripts/.github/workflows/gates.yml@<sha>  # vX.Y.Z
+    with:
+      runner: ubuntu-latest   # required — see the scope lock above
+      require_issue_link: false
+```
+
 ## Tools
 
 ### `docs_check.py`

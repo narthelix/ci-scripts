@@ -1,0 +1,145 @@
+# Every org-wide PR gate in ONE job (narthelix/ops#2050): pr-conventions,
+# secret-scan, zizmor, repo-lint, then the risk class.
+#
+# WHY ONE JOB. Measured 2026-10-11 over 1,006 ARC jobs: queue time is backlog,
+# not cold start. A job that arrives with nothing else in the system starts in
+# 3 s; one that arrives with 20+ others waits a median 484 s, and 74% of jobs
+# arrived that way. Each gate was its own job, most under 30 s, so every PR put
+# four short jobs (four pods, four checkouts, four tool set-ups) into that
+# backlog. Here they are steps of one job: one pod and one checkout per PR.
+# A warm runner pool was measured and dropped: pod start is ~20 s.
+#
+# ORDER IS THE POINT. The checks run first; the risk class and auto-merge run
+# last. A step after a failed one is skipped, and the merger App's client ID is
+# withheld once the job has failed -- so a red secret scan or lint never turns
+# on auto-merge. (Separate jobs could not say that: actions-lint was not even a
+# required check.) The risk label is still set on a red PR, so the founder
+# sees the class either way.
+#
+# The checks themselves live in `actions/` as composite actions, and the
+# per-check workflows (pr-conventions.yml, secret-scan.yml, actions-lint.yml)
+# run the same actions: one copy of each rule while callers migrate. The
+# actions are taken from this workflow's OWN commit (`job.workflow_sha`), so a
+# caller pinned to a SHA gets the checks of that SHA -- `./actions/...` would
+# resolve against the caller's repository instead.
+#
+# Public for the same reason as the others (ADR-0097/0099): `runner` has no
+# default and stays with the caller.
+name: gates
+
+on:
+  workflow_call:
+    inputs:
+      runner:
+        description: >-
+          runs-on value. Plain label or a JSON array as a string. Required: this
+          repository is public and holds no runner labels of its own.
+        required: true
+        type: string
+      require_issue_link:
+        description: >-
+          Require Closes/Fixes/Resolves/Refs #N in the PR body. Leave false in a
+          repo whose driving issues live in another repo's tracker.
+        required: false
+        type: boolean
+        default: true
+      skip_paths:
+        description: >-
+          Space-separated path prefixes. A PR touching ONLY these skips
+          pr-conventions and secret-scan. Empty (the default) never skips.
+        required: false
+        type: string
+        default: ''
+      config_path:
+        description: gitleaks calibration file, shared with the pre-commit hook. Skipped if absent.
+        required: false
+        type: string
+        default: '.gitleaks.toml'
+      risk_ask_paths:
+        description: Space-separated extra regexes that make a PR Ask (handbook ADR-0128).
+        required: false
+        type: string
+        default: ''
+      risk_floor:
+        description: Lowest class any PR in this repository can get (`ask` for gitops, infra-terraform).
+        required: false
+        type: string
+        default: 'ship'
+      merger_client_id:
+        description: Client ID of the merger App (pairs with secrets.merger_private_key).
+        required: false
+        type: string
+        default: ''
+    outputs:
+      risk_class:
+        description: ship | show | ask (handbook ADR-0128)
+        value: ${{ jobs.gate.outputs.risk_class }}
+    secrets:
+      merger_private_key:
+        description: >-
+          Private key of the org's merger GitHub App. Omitted, nothing is
+          auto-merged.
+        required: false
+
+jobs:
+  gate:
+    runs-on: ${{ startsWith(inputs.runner, '[') && fromJSON(inputs.runner) || inputs.runner }}
+    timeout-minutes: 15
+    # pull-requests: write is for the risk:* label and reviewdog's review
+    # comments; the union of what the four gates asked for separately.
+    permissions:
+      contents: read
+      pull-requests: write
+    outputs:
+      risk_class: ${{ steps.risk.outputs.risk_class }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: ci-scripts at this workflow's commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .narthelix-ci-scripts
+          sparse-checkout: |
+            actions
+            gitleaks
+          persist-credentials: false
+
+      - name: pr-conventions
+        id: conventions
+        if: github.event_name == 'pull_request'
+        uses: ./.narthelix-ci-scripts/actions/pr-conventions
+        with:
+          skip_paths: ${{ inputs.skip_paths }}
+          require_issue_link: ${{ inputs.require_issue_link }}
+
+      - name: secret-scan
+        uses: ./.narthelix-ci-scripts/actions/secret-scan
+        with:
+          config_path: ${{ inputs.config_path }}
+          skip_paths: ${{ inputs.skip_paths }}
+
+      - name: zizmor
+        uses: ./.narthelix-ci-scripts/actions/zizmor
+
+      - name: repo-lint
+        if: github.event_name == 'pull_request'
+        uses: ./.narthelix-ci-scripts/actions/repo-lint
+
+      # `!cancelled()`, not the default `success()`: the label is set on a red
+      # PR too. The merge is not -- the client ID is passed only while the job
+      # is still green.
+      - name: risk
+        id: risk
+        if: github.event_name == 'pull_request' && !cancelled()
+        uses: ./.narthelix-ci-scripts/actions/risk
+        with:
+          risk_ask_paths: ${{ inputs.risk_ask_paths }}
+          risk_floor: ${{ inputs.risk_floor }}
+          exempt: ${{ steps.conventions.outputs.exempt || 'false' }}
+          merger_client_id: ${{ job.status == 'success' && inputs.merger_client_id || '' }}
+          merger_private_key: ${{ secrets.merger_private_key }}
