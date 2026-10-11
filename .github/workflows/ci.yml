@@ -74,3 +74,15 @@ jobs:
     uses: ./.github/workflows/actions-lint.yml
     with:
       runner: ubuntu-latest  # public repo -- rationale at the top of this file
+
+  # All four gates in one job (narthelix/ops#2050). Runs beside the per-check
+  # workflows above while callers migrate, so a PR here exercises both.
+  gates:
+    permissions:
+      contents: read
+      pull-requests: write
+    uses: ./.github/workflows/gates.yml
+    with:
+      risk_floor: ask
+      require_issue_link: false
+      runner: ubuntu-latest  # public repo -- rationale at the top of this file

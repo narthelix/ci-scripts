@@ -1,0 +1,126 @@
+# zizmor -- GitHub Actions security lint (narthelix/ops#2050: the steps of
+# `.github/workflows/actions-lint.yml`'s zizmor job, shared with `gates.yml`).
+# Rationale (new findings only, no baseline file; what fails) lives at the top
+# of that workflow.
+#
+# Expects the caller's repository checked out with fetch-depth: 0 and
+# persist-credentials: false.
+name: zizmor
+description: zizmor on .github/; on a PR only added lines can fail it.
+
+inputs:
+  zizmor_version:
+    required: false
+    default: '1.30.1'
+  min_severity:
+    required: false
+    default: 'medium'
+
+runs:
+  using: composite
+  steps:
+
+    # ⚠ setup-python ZORUNLU, sistem python3'une guvenilmez -- OLCULDU 2026-09-26:
+    # israel self-hosted runner'larda `python3 -m venv` "ensurepip is not
+    # available" ile dustu ve v0.7.0 ilk gun 25 cagiranin hepsinde kirmiziydi
+    # (hosted ubuntu-latest'te gecti, o yuzden ci-scripts'in kendi CI'i gormedi).
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      with:
+        python-version: '3.12'
+
+    - name: zizmor kurulum
+      env:
+        ZIZMOR_VERSION: ${{ inputs.zizmor_version }}
+      shell: bash
+      run: |
+        python3 -m venv "$RUNNER_TEMP/zizmor"
+        "$RUNNER_TEMP/zizmor/bin/pip" install --quiet "zizmor==${ZIZMOR_VERSION}"
+        echo "$RUNNER_TEMP/zizmor/bin" >> "$GITHUB_PATH"
+
+    # The org policy, unless the repo ships its own `.github/zizmor.yml`.
+    # `narthelix/*` is `any`: our reusable workflows are called at @main on
+    # purpose (ADR-0099) — the same exception the org Renovate preset makes.
+    # Everything else must be SHA-pinned (Renovate pins it for you).
+    - name: zizmor ayarı
+      shell: bash
+      run: |
+        if [ -f .github/zizmor.yml ]; then
+          echo "ZIZMOR_CONFIG=.github/zizmor.yml" >> "$GITHUB_ENV"
+        else
+          cat > "$RUNNER_TEMP/zizmor.yml" <<'YAML'
+        rules:
+          unpinned-uses:
+            config:
+              policies:
+                "narthelix/*": any
+                "*": hash-pin
+        YAML
+          echo "ZIZMOR_CONFIG=$RUNNER_TEMP/zizmor.yml" >> "$GITHUB_ENV"
+        fi
+
+    - name: reviewdog kurulum (PR)
+      if: github.event_name == 'pull_request'
+      uses: reviewdog/action-setup@d8a7baabd7f3e8544ee4dbde3ee41d0011c3a93f # v1.5.0
+      with:
+        reviewdog_version: v0.21.0
+
+    - name: zizmor (PR — yalnız eklenen satırlar)
+      if: github.event_name == 'pull_request'
+      env:
+        REVIEWDOG_GITHUB_API_TOKEN: ${{ github.token }}
+        MIN_SEVERITY: ${{ inputs.min_severity }}
+      shell: bash
+      run: |
+        # ⚠ `--offline`, MEASURED 2026-09-26: the online audits (ref-confusion &c.)
+        # list branches of every repo a workflow calls, and a caller's token cannot
+        # read the private narthelix/.github -- zizmor died with "no audit was
+        # performed" on every caller. Known-vulnerable action versions, the main
+        # online value, already come from Renovate's security alerts.
+        #
+        # ⚠ The tool failing is NOT "no findings": in SARIF mode zizmor exits 0
+        # with findings too (measured), so any non-zero exit is zizmor itself
+        # breaking. Piped straight into reviewdog that read as "parse error: EOF"
+        # -- a red that explains nothing. It is caught and named here instead.
+        rc=0
+        zizmor --offline --config "$ZIZMOR_CONFIG" --format sarif --min-severity "$MIN_SEVERITY" .github/ \
+          > "$RUNNER_TEMP/zizmor.sarif" || rc=$?
+        if [ "$rc" -ne 0 ]; then
+          echo "::error title=zizmor calismadi::zizmor exit $rc -- arac hatasi, bulgu degil (log'a bak)"
+          exit "$rc"
+        fi
+        # ⚠ PRs over 300 files: GitHub's diff API refuses them (406), and
+        # reviewdog falls back to its own `git fetch` -- which has no credentials,
+        # because checkout runs with `persist-credentials: false`. Measured on
+        # narthelix/design#1 (452 files): zizmor and repo-lint both died with
+        # "could not read Username". The token is handed to git through
+        # environment-only config for this step: it never reaches .git/config,
+        # so the persist-credentials decision stands.
+        _auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$REVIEWDOG_GITHUB_API_TOKEN" | base64 | tr -d '\n')"
+        echo "::add-mask::$_auth"
+        export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.https://github.com/.extraheader" GIT_CONFIG_VALUE_0="$_auth"
+        reviewdog -f=sarif -name=zizmor -reporter=github-pr-review \
+          -filter-mode=added -fail-level=error < "$RUNNER_TEMP/zizmor.sarif"
+
+    - name: zizmor (main — rapor, kırmızı değil)
+      if: github.event_name != 'pull_request'
+      env:
+        MIN_SEVERITY: ${{ inputs.min_severity }}
+      shell: bash
+      run: |
+        {
+          echo '## zizmor — mevcut borç (bilgi)'
+          echo '```'
+          zizmor --offline --config "$ZIZMOR_CONFIG" --format plain --min-severity "$MIN_SEVERITY" .github/ 2>&1 | tail -3 || true
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+
+# Dilim 6 (narthelix/muznara#1852): the rest of what SonarCloud flagged in
+# repo plumbing -- shell scripts, Dockerfiles, and install commands that run
+# third-party code. Same contract as zizmor above: only lines THIS PR adds can
+# fail it. Baselines measured 2026-09-26: shellcheck 8, hadolint 6,
+# install-scripts 8 across the fleet.
+#
+# ⚠ Tools come as pinned, sha256-checked release binaries for the runner's
+# own arch -- never the system package manager. MEASURED the same day: the
+# israel self-hosted runners have no `ensurepip`, and this workflow's first
+# version went red in 25 repos because it trusted the system python3.

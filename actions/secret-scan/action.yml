@@ -1,0 +1,117 @@
+# gitleaks secret scan (narthelix/ops#2050: the steps of
+# `.github/workflows/secret-scan.yml`, shared with `gates.yml`).
+#
+# Expects the caller's repository checked out with fetch-depth: 0.
+name: secret-scan
+description: Scan the PR's commit range (or full history on push) with gitleaks.
+
+inputs:
+  gitleaks_version:
+    required: false
+    default: '8.30.1'
+  config_path:
+    description: Calibration file, shared with the pre-commit hook. Skipped if absent.
+    required: false
+    default: '.gitleaks.toml'
+  skip_paths:
+    description: Space-separated path prefixes; a PR touching ONLY these is skipped.
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Decide whether this PR is in scope
+      id: scope
+      shell: bash
+      env:
+        SKIP_PREFIXES: ${{ inputs.skip_paths }}
+        EVENT_NAME: ${{ github.event_name }}
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      run: '"$GITHUB_ACTION_PATH/../scope.sh"'
+
+    # The gitleaks CLI, not gitleaks/gitleaks-action: the action hard-fails on
+    # organization-owned repos without a registered GITLEAKS_LICENSE, which
+    # broke every PR when this org's repos moved under an organization. The
+    # CLI is MIT and needs no license. Pinned + arch-detected so it is
+    # reproducible.
+    - name: Install gitleaks (pinned, checksum-verified)
+      if: steps.scope.outputs.in_scope == 'true'
+      shell: bash
+      env:
+        GITLEAKS_VERSION: ${{ inputs.gitleaks_version }}
+      run: |
+        set -euo pipefail
+        os=$(uname -s | tr '[:upper:]' '[:lower:]')
+        case "$(uname -m)" in
+          x86_64|amd64)  arch=x64 ;;
+          aarch64|arm64) arch=arm64 ;;
+          *) echo "unsupported arch: $(uname -m)" >&2; exit 1 ;;
+        esac
+        asset="gitleaks_${GITLEAKS_VERSION}_${os}_${arch}.tar.gz"
+        base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+        # `-L` follows redirects, so the scheme has to be pinned on the
+        # redirect too: without --proto-redir a downgrade to http would be
+        # followed silently. It matters most for the checksums file — that is
+        # the thing the tamper check trusts.
+        curl_opts=(-fsSL --proto '=https' --proto-redir '=https')
+        curl "${curl_opts[@]}" "${base}/${asset}" -o "${RUNNER_TEMP}/${asset}"
+        curl "${curl_opts[@]}" "${base}/gitleaks_${GITLEAKS_VERSION}_checksums.txt" -o "${RUNNER_TEMP}/checksums.txt"
+        # Verify before trusting: a scanner that got corrupted or tampered and
+        # exits 0 would silently pass this security gate.
+        expected=$(awk -v a="${asset}" '$2==a {print $1}' "${RUNNER_TEMP}/checksums.txt")
+        if command -v sha256sum >/dev/null 2>&1; then
+          actual=$(sha256sum "${RUNNER_TEMP}/${asset}" | awk '{print $1}')
+        else
+          actual=$(shasum -a 256 "${RUNNER_TEMP}/${asset}" | awk '{print $1}')
+        fi
+        if [ -z "$expected" ] || [ "$expected" != "$actual" ]; then
+          echo "::error::gitleaks checksum verification failed (expected=$expected actual=$actual)"
+          exit 1
+        fi
+        tar -xzf "${RUNNER_TEMP}/${asset}" -C "${RUNNER_TEMP}" gitleaks
+        chmod +x "${RUNNER_TEMP}/gitleaks"
+        "${RUNNER_TEMP}/gitleaks" version
+
+    # PR: scan only the PR's commit range (fetch-depth:0 makes both ends
+    # present), falling back to full history if base.sha is unreachable (e.g.
+    # the base branch was force-pushed) so the gate never spuriously fails nor
+    # silently skips. Push: full-history backstop.
+    #
+    # Our own rules (`gitleaks/narthelix.toml`) come from this action's own
+    # checkout, i.e. the commit the caller pinned -- never whatever `main`
+    # says today.
+    - name: Scan for secrets
+      if: steps.scope.outputs.in_scope == 'true'
+      shell: bash
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        CONFIG_PATH: ${{ inputs.config_path }}
+      run: |
+        set -euo pipefail
+        if [ "$EVENT_NAME" = "pull_request" ] && git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+          range="--log-opts=${BASE_SHA}..${HEAD_SHA}"
+        else
+          range=""
+        fi
+        # A repo without its own calibration file runs gitleaks' defaults
+        # rather than failing to start — the gate must not be skippable by
+        # omission. Either way our own formats are added on top
+        # (`gitleaks/narthelix.toml`, narthelix/muznara#1844): the defaults
+        # do not know an `nlx_` key, measured.
+        wrapper="${RUNNER_TEMP}/gitleaks-wrapped.toml"
+        if [ -f "$CONFIG_PATH" ]; then
+          printf '[extend]\npath = "%s"\n\n' "$PWD/$CONFIG_PATH" > "$wrapper"
+        else
+          printf '[extend]\nuseDefault = true\n\n' > "$wrapper"
+          echo "::notice::$CONFIG_PATH not found — running gitleaks default rules"
+        fi
+        rules="$GITHUB_ACTION_PATH/../../gitleaks/narthelix.toml"
+        # Fail closed: a scan without our rules would pass a leaked key.
+        [ -f "$rules" ] || { echo "::error::$rules missing"; exit 1; }
+        cat "$rules" >> "$wrapper"
+        cfg="--config=$wrapper"
+        "${RUNNER_TEMP}/gitleaks" git $cfg --redact --exit-code 1 $range .

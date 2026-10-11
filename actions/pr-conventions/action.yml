@@ -1,0 +1,100 @@
+# Branch-naming + issue-traceability checks (narthelix/ops#2050).
+#
+# The steps of `.github/workflows/pr-conventions.yml`, moved here so that
+# workflow and `gates.yml` run one copy. Risk classification and auto-merge
+# are a separate action (`../risk`): in `gates.yml` they must come after every
+# other check, so a red lint stops the auto-merge.
+#
+# Expects the caller's repository checked out with fetch-depth: 0.
+name: pr-conventions
+description: Branch name and PR-body issue link checks.
+
+inputs:
+  skip_paths:
+    description: Space-separated path prefixes; a PR touching ONLY these is skipped.
+    required: false
+    default: ''
+  require_issue_link:
+    description: Require Closes/Fixes/Resolves/Refs #N in the PR body ('true'/'false').
+    required: false
+    default: 'true'
+  branch_pattern:
+    required: false
+    default: '^(feature|fix|chore|docs|refactor)/[1-9][0-9]*-[a-z0-9]+(-[a-z0-9]+)*$'
+  exempt_authors:
+    description: Comma-separated bot logins exempt from both checks.
+    required: false
+    default: 'dependabot[bot],renovate[bot]'
+
+outputs:
+  exempt:
+    description: "'true' when the PR author is an exempt bot."
+    value: ${{ steps.author.outputs.exempt }}
+
+runs:
+  using: composite
+  steps:
+    - name: Decide whether this PR is in scope
+      id: scope
+      shell: bash
+      env:
+        SKIP_PREFIXES: ${{ inputs.skip_paths }}
+        EVENT_NAME: ${{ github.event_name }}
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      run: '"$GITHUB_ACTION_PATH/../scope.sh"'
+
+    - name: Check author exemption
+      id: author
+      shell: bash
+      env:
+        AUTHOR: ${{ github.event.pull_request.user.login }}
+        EXEMPT: ${{ inputs.exempt_authors }}
+      run: |
+        set -euo pipefail
+        # PR *author*, not github.actor: actor is whoever triggered the event,
+        # so a human editing a bot PR's body would otherwise break the exemption.
+        exempt=false
+        IFS=',' read -ra names <<< "$EXEMPT"
+        for n in "${names[@]}"; do
+          [ "$(echo "$n" | xargs)" = "$AUTHOR" ] && exempt=true
+        done
+        echo "exempt=$exempt" >> "$GITHUB_OUTPUT"
+
+    - name: Check branch name
+      if: steps.author.outputs.exempt == 'false' && steps.scope.outputs.in_scope == 'true'
+      shell: bash
+      env:
+        BRANCH: ${{ github.head_ref }}
+        PATTERN: ${{ inputs.branch_pattern }}
+      run: |
+        if [[ ! "$BRANCH" =~ $PATTERN ]]; then
+          echo "::error::Branch name '$BRANCH' does not match <type>/<issue-no>-<kebab-description>"
+          echo "Expected pattern: $PATTERN (types: feature, fix, chore, docs, refactor)"
+          exit 1
+        fi
+
+    # An optional `owner/repo` between the keyword and the `#` is ACCEPTED, and
+    # that is the point of the pattern rather than an afterthought.
+    #
+    # The narrow form (`refs[[:space:]]*#N`) rejected `Refs owner/repo#N` — a
+    # reference that renders perfectly inside the tracker repo, which is the
+    # only repo where this check is even on. So the gate was failing a VALID
+    # body and sending the author to rewrite a correct sentence. It bit
+    # repeatedly, most visibly on a fleet-wide sweep whose one shared body was
+    # written in the cross-repo form.
+    #
+    # ⚠ The looser form does not weaken anything: this step only runs where
+    # `require_issue_link` is true, i.e. the repo that owns the tracker. In every
+    # other repo the input is false precisely because a bare `#N` there would
+    # resolve against the wrong repo -- and that reasoning is unchanged.
+    - name: Check PR body links an issue
+      if: inputs.require_issue_link == 'true' && steps.author.outputs.exempt == 'false' && steps.scope.outputs.in_scope == 'true'
+      shell: bash
+      env:
+        BODY: ${{ github.event.pull_request.body }}
+      run: |
+        if ! grep -qiE '\b(closes|fixes|resolves|refs)\b[[:space:]]*([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)?#[0-9]+' <<< "$BODY"; then
+          echo "::error::PR body must reference an issue: 'Closes #N' / 'Refs #N', or the cross-repo form 'Refs owner/repo#N'."
+          exit 1
+        fi

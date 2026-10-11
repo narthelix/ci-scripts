@@ -1,0 +1,110 @@
+# Risk class (handbook ADR-0128) + auto-merge of Ship/Show (narthelix/ops#2050).
+#
+# Split out of pr-conventions so `gates.yml` can run it LAST: a step after a
+# failed one is skipped, so a red secret scan or lint never enables an
+# auto-merge. The class is computed from the changed paths, never chosen by
+# the author. It runs for bot PRs too -- Renovate's own automerge still
+# governs those, the label only records the class. It never fails the job: a
+# labelling error must not turn every PR red.
+#
+# `risk_class.py` comes from this action's own checkout -- the commit the
+# caller pinned. It used to be fetched by a separately pinned `risk_script_ref`
+# because a workflow cannot know its own commit; an action path can.
+name: risk
+description: Label the PR risk:ship|show|ask and auto-merge Ship/Show through the merger App.
+
+inputs:
+  risk_ask_paths:
+    description: Space-separated extra regexes that make a PR Ask.
+    required: false
+    default: ''
+  risk_floor:
+    description: Lowest class any PR in this repository can get.
+    required: false
+    default: 'ship'
+  exempt:
+    description: "'true' when the PR author is an exempt bot (pr-conventions output)."
+    required: false
+    default: 'false'
+  merger_client_id:
+    description: Client ID of the merger App. Empty, nothing is auto-merged.
+    required: false
+    default: ''
+  merger_private_key:
+    description: >-
+      Private key of the merger App. An App token, not GITHUB_TOKEN: a merge
+      made with GITHUB_TOKEN starts no workflow run, so main's deploy would
+      silently never happen.
+    required: false
+    default: ''
+
+outputs:
+  risk_class:
+    description: ship | show | ask
+    value: ${{ steps.risk.outputs.class }}
+
+runs:
+  using: composite
+  steps:
+    - name: Classify risk (Ship / Show / Ask)
+      id: risk
+      if: github.event_name == 'pull_request'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REPO: ${{ github.repository }}
+        NUM: ${{ github.event.pull_request.number }}
+        LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        ASK_PATHS: ${{ inputs.risk_ask_paths }}
+        FLOOR: ${{ inputs.risk_floor }}
+      run: |
+        set -uo pipefail
+        script="$GITHUB_ACTION_PATH/../../risk_class.py"
+        [ -f "$script" ] || { echo "::warning::risk_class.py missing next to the action"; exit 0; }
+        out=$(gh api "repos/${REPO}/pulls/${NUM}/files" --paginate --jq '.[] | [.status, .filename] | @tsv' \
+          | python3 "$script" --labels "$LABELS" --ask-paths "$ASK_PATHS" --floor "$FLOOR")
+        cls=$(sed -n 's/^class=//p' <<< "$out")
+        [ -n "$cls" ] || { echo "::warning::risk classification failed"; exit 0; }
+        echo "class=$cls" >> "$GITHUB_OUTPUT"
+        { echo "### Risk class: \`$cls\` (ADR-0128)"; sed -n 's/^reason=/- /p' <<< "$out"; } >> "$GITHUB_STEP_SUMMARY"
+        for c in ship show ask; do
+          gh label create "risk:$c" -R "$REPO" --color "$( [ $c = ask ] && echo d93f0b || ([ $c = show ] && echo fbca04 || echo 0e8a16))" \
+            --description "ADR-0128 risk class, set by pr-conventions" 2>/dev/null || true
+          [ "$c" = "$cls" ] && continue
+          gh pr edit "$NUM" -R "$REPO" --remove-label "risk:$c" >/dev/null 2>&1 || true
+        done
+        gh pr edit "$NUM" -R "$REPO" --add-label "risk:$cls" >/dev/null || echo "::warning::could not set label risk:$cls"
+
+    # ADR-0128 S2: Ship and Show merge themselves once every required check is
+    # green. Ask is left alone -- only the founder enables a merge there. Bot
+    # PRs are skipped: Renovate and the AI doc flow manage their own
+    # auto-merge. The token is narrowed to this one repository.
+    - name: Mint merger token (Ship / Show)
+      id: merger
+      if: >-
+        github.event_name == 'pull_request' && !github.event.pull_request.draft &&
+        (steps.risk.outputs.class == 'ship' || steps.risk.outputs.class == 'show') &&
+        inputs.exempt == 'false' && inputs.merger_client_id != ''
+      continue-on-error: true
+      uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+      with:
+        client-id: ${{ inputs.merger_client_id }}
+        private-key: ${{ inputs.merger_private_key }}
+        repositories: ${{ github.event.repository.name }}
+        permission-contents: write
+        permission-pull-requests: write
+
+    - name: Enable auto-merge (Ship / Show)
+      if: steps.merger.outputs.token != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.merger.outputs.token }}
+        REPO: ${{ github.repository }}
+        NUM: ${{ github.event.pull_request.number }}
+        CLS: ${{ steps.risk.outputs.class }}
+      run: |
+        if gh pr merge "$NUM" -R "$REPO" --auto --squash --delete-branch; then
+          echo "::notice::risk:${CLS} -- auto-merge enabled; merges when every required check is green"
+        else
+          echo "::warning::could not enable auto-merge (branch protection / allow_auto_merge?)"
+        fi
