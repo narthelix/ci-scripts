@@ -1,0 +1,88 @@
+# Terraform plan -> risk (handbook ADR-0128 amendment, narthelix/ops#2055).
+#
+# An infrastructure repository sets `risk_floor: show`; this action is what
+# keeps a dangerous plan from merging itself. It reads the plan text with
+# `tf_plan_risk.py` (from this action's own checkout, the commit the caller
+# pinned) and:
+#   mode=pr     -- a destroy, a replace, an access-related change or an
+#                  unreadable plan escalates the PR to Ask: label
+#                  `risk:escalated` + `risk:ask`, auto-merge OFF. Runs inside
+#                  the plan job, which the caller makes a REQUIRED check, so the
+#                  escalation lands before auto-merge could fire.
+#   mode=apply  -- the merge-time plan can differ from the PR's. If it is Ask
+#                  and the merged PR was not `risk:ask`, the job FAILS before
+#                  anything is applied: a stale Show plan never applies a delete.
+name: plan-risk
+description: Escalate a Terraform PR to Ask on a risky plan; refuse a risky apply behind a Show merge.
+
+inputs:
+  plan_file:
+    description: Path to the human plan text (terraform plan -no-color / terraform show -no-color).
+    required: true
+  mode:
+    description: pr | apply
+    required: true
+  sensitive:
+    description: Optional regex over resource types that count as access-related (replaces the default).
+    required: false
+    default: ''
+
+outputs:
+  risk_class:
+    description: show | ask
+    value: ${{ steps.classify.outputs.class }}
+
+runs:
+  using: composite
+  steps:
+    - name: Classify plan
+      id: classify
+      shell: bash
+      env:
+        PLAN_FILE: ${{ inputs.plan_file }}
+        SENSITIVE: ${{ inputs.sensitive }}
+      run: |
+        set -uo pipefail
+        script="$GITHUB_ACTION_PATH/../../tf_plan_risk.py"
+        if [ -n "$SENSITIVE" ]; then
+          out=$(python3 "$script" --sensitive "$SENSITIVE" < "$PLAN_FILE")
+        else
+          out=$(python3 "$script" < "$PLAN_FILE")
+        fi
+        cls=$(sed -n 's/^class=//p' <<< "$out")
+        [ -n "$cls" ] || cls=ask
+        echo "class=$cls" >> "$GITHUB_OUTPUT"
+        { echo "### Plan risk: \`$cls\` (ADR-0128)"; sed -n 's/^reason=/- /p' <<< "$out"; } >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Escalate the PR (mode=pr)
+      if: inputs.mode == 'pr' && steps.classify.outputs.class == 'ask' && github.event_name == 'pull_request'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REPO: ${{ github.repository }}
+        NUM: ${{ github.event.pull_request.number }}
+      run: |
+        # Auto-merge off FIRST: the labels are the record, this is the gate.
+        gh pr merge "$NUM" -R "$REPO" --disable-auto >/dev/null 2>&1 || true
+        gh label create risk:escalated -R "$REPO" --color b60205 \
+          --description "ADR-0128: raised to Ask by an automated check" 2>/dev/null || true
+        gh pr edit "$NUM" -R "$REPO" --remove-label risk:ship --remove-label risk:show >/dev/null 2>&1 || true
+        gh pr edit "$NUM" -R "$REPO" --add-label risk:escalated --add-label risk:ask >/dev/null \
+          || { echo "::error::could not escalate the PR to Ask"; exit 1; }
+        echo "::notice::plan is Ask -- auto-merge disabled; the founder merges this one"
+
+    - name: Refuse a risky apply behind a Show merge (mode=apply)
+      if: inputs.mode == 'apply' && steps.classify.outputs.class == 'ask'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REPO: ${{ github.repository }}
+        SHA: ${{ github.sha }}
+      run: |
+        labels=$(gh api "repos/${REPO}/commits/${SHA}/pulls" --jq '.[0].labels[].name' 2>/dev/null || true)
+        if grep -qx 'risk:ask' <<< "$labels"; then
+          echo "::notice::risky plan, but the merged PR was Ask -- the founder approved it"
+          exit 0
+        fi
+        echo "::error::the merge-time plan is Ask (see the summary) but the merged PR was not -- nothing applied. Open a PR so the founder can review the plan."
+        exit 1

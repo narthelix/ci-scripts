@@ -75,6 +75,22 @@ The required check becomes `gates / gate`.
       require_issue_link: false
 ```
 
+### Risk class by effect (narthelix/ops#2055)
+
+`risk_class.py` (run by `actions/risk`) reads each file's diff as well as its
+path: a NEW migration whose `upgrade()` only creates is Show, and a workflow
+change whose every changed line is a SHA/version pin is Show. Everything else
+in those paths stays Ask, and so does anything it cannot read (no diff, a
+deleted or edited migration).
+
+`actions/plan-risk` + `tf_plan_risk.py` are for infrastructure repositories
+that set `risk_floor: show`. Call it from the plan job (`mode: pr`, the job
+must be a required check) and from the apply job before applying
+(`mode: apply`). A plan that destroys, replaces, changes an access-related
+resource or cannot be read escalates the PR to Ask and turns auto-merge off;
+at apply time the same plan behind a non-Ask PR fails the job before anything
+is applied.
+
 ## Tools
 
 ### `docs_check.py`
