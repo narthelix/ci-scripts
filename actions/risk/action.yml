@@ -1,5 +1,8 @@
 # Risk class (handbook ADR-0128) + auto-merge of Ship/Show (narthelix/ops#2050).
 #
+# Paths plus diffs: most classes come from the path, migrations and CI
+# workflows from their effect (narthelix/ops#2055).
+#
 # Split out of pr-conventions so `gates.yml` can run it LAST: a step after a
 # failed one is skipped, so a red secret scan or lint never enables an
 # auto-merge. The class is computed from the changed paths, never chosen by
@@ -61,7 +64,10 @@ runs:
         set -uo pipefail
         script="$GITHUB_ACTION_PATH/../../risk_class.py"
         [ -f "$script" ] || { echo "::warning::risk_class.py missing next to the action"; exit 0; }
-        out=$(gh api "repos/${REPO}/pulls/${NUM}/files" --paginate --jq '.[] | [.status, .filename] | @tsv' \
+        # The diff travels with each path: migrations and workflows are judged
+        # by what they do (ADR-0128 amendment, narthelix/ops#2055). GitHub
+        # omits `patch` on very large files; the classifier fails closed then.
+        out=$(gh api "repos/${REPO}/pulls/${NUM}/files" --paginate --jq '.[] | {status, filename, patch} | @json' \
           | python3 "$script" --labels "$LABELS" --ask-paths "$ASK_PATHS" --floor "$FLOOR")
         cls=$(sed -n 's/^class=//p' <<< "$out")
         [ -n "$cls" ] || { echo "::warning::risk classification failed"; exit 0; }
