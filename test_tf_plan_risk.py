@@ -91,6 +91,20 @@ check("custom iam role -> ask",
       cls("  # google_project_iam_custom_role.r will be created\nPlan: 1 to add, 0 to change, 0 to destroy.\n"), "ask")
 check("data source read is not a change",
       cls("  # data.google_iam_policy.x will be read during apply\nPlan: 0 to add, 0 to change, 0 to destroy.\n"), "show")
+OUTPUTS_ONLY = """oci_core_security_list.prod: Refreshing state... [id=ocid1.securitylist.oc1.il-jerusalem-1.x]
+
+Changes to Outputs:
+  ~ israel_agent_cost_estimate           = {
+      ~ pricing_api_last_check             = "2026-10-11T05:05:24Z" -> "2026-10-12T05:33:08Z"
+        # (11 unchanged attributes hidden)
+    }
+
+You can apply this plan to save these new output values to the Terraform
+state, without changing any real infrastructure.
+"""
+check("outputs-only plan (real OCI shape) -> show", cls(OUTPUTS_ONLY), "show")
+check("refresh lines naming a security list are not a change",
+      tr.classify(OUTPUTS_ONLY)[1], ["plan only creates or updates non-sensitive resources"])
 check("empty input fails closed", cls(""), "ask")
 check("truncated plan (no summary) fails closed", cls(FIREBASE.split("Plan:")[0]), "ask")
 check("plan with an error fails closed", cls(FIREBASE + "\n│ Error: Unauthorized\n"), "ask")

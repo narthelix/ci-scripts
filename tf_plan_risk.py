@@ -28,7 +28,13 @@ ACTION = re.compile(
     r"|will be imported|is tainted, so must be replaced)"
 )
 SUMMARY = re.compile(r"^Plan: \d+ to (import, \d+ to )?add, \d+ to change, \d+ to destroy\.")
-NO_CHANGES = re.compile(r"^No changes\.|^Your infrastructure matches the configuration\.")
+NO_CHANGES = re.compile(
+    r"^No changes\.|^Your infrastructure matches the configuration\."
+    # Only an output value changes: Terraform prints no `Plan:` summary then,
+    # just this sentence (measured on infra-terraform#119, the OCI stack's
+    # daily `pricing_api_last_check` output). No real resource changes.
+    r"|without changing any real infrastructure\."
+)
 ERROR = re.compile(r"^\s*(│\s*)?Error: ")
 
 DESTRUCTIVE = ("will be destroyed", "must be replaced", "will be replaced", "is tainted, so must be replaced")
