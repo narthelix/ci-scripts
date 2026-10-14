@@ -11,9 +11,14 @@
 # `.env` file -> "no leaks found" under the default rules, while a fake AWS
 # key in the same repo was found (the negative control). With the rule below:
 # all three found.
+#
+# Test keys (narthelix/ops#2071 D3, 2026-10-14): `nlx_test_` + the same body.
+# A test key reaches the same data as a live one today, so it is a secret too.
+# Measured: a test key and a live key in one `.env` -> 1 finding with the old
+# regex (the live key only), 2 with this one.
 
 [[rules]]
 id = "narthelix-api-key"
-description = "Narthelix developer API key: nlx_ + 65 Base62 (16 id + 43 secret + 6 CRC32)"
-regex = '''\bnlx_[0-9A-Za-z]{65}\b'''
+description = "Narthelix developer API key: nlx_ or nlx_test_ + 65 Base62 (16 id + 43 secret + 6 CRC32)"
+regex = '''\bnlx_(?:test_)?[0-9A-Za-z]{65}\b'''
 keywords = ["nlx_"]
