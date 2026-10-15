@@ -57,13 +57,20 @@ runs:
         GH_TOKEN: ${{ github.token }}
         REPO: ${{ github.repository }}
         NUM: ${{ github.event.pull_request.number }}
-        LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        EVENT_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
         ASK_PATHS: ${{ inputs.risk_ask_paths }}
         FLOOR: ${{ inputs.risk_floor }}
       run: |
         set -uo pipefail
         script="$GITHUB_ACTION_PATH/../../risk_class.py"
         [ -f "$script" ] || { echo "::warning::risk_class.py missing next to the action"; exit 0; }
+        # LIVE labels, not the event's snapshot (narthelix/ops#2099). The snapshot
+        # is taken when the PR is opened; plan-risk adds `risk:escalated` a minute
+        # later, and this step -- finishing after it -- read the stale list, wrote
+        # `show` and removed the escalation (infra-terraform#124, 2026-10-15). The
+        # apply-time guard then refused the delete, as designed.
+        live() { gh api "repos/${REPO}/issues/${NUM}/labels" --jq '[.[].name] | join(",")'; }
+        LABELS=$(live 2>/dev/null) || LABELS="$EVENT_LABELS"
         # The diff travels with each path: migrations and workflows are judged
         # by what they do (ADR-0128 amendment, narthelix/ops#2055). GitHub
         # omits `patch` on very large files; the classifier fails closed then.
@@ -71,6 +78,10 @@ runs:
           | python3 "$script" --labels "$LABELS" --ask-paths "$ASK_PATHS" --floor "$FLOOR")
         cls=$(sed -n 's/^class=//p' <<< "$out")
         [ -n "$cls" ] || { echo "::warning::risk classification failed"; exit 0; }
+        # Re-read before ANY output: an escalation that landed while the classifier
+        # ran must still win -- for the label, and for the merger steps below that
+        # read `class`. Nothing here ever lowers `risk:escalated`.
+        case ",$(live 2>/dev/null)," in *,risk:escalated,*) cls=ask ;; esac
         echo "class=$cls" >> "$GITHUB_OUTPUT"
         { echo "### Risk class: \`$cls\` (ADR-0128)"; sed -n 's/^reason=/- /p' <<< "$out"; } >> "$GITHUB_STEP_SUMMARY"
         for c in ship show ask; do
