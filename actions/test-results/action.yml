@@ -6,6 +6,10 @@
 # Never fails the job: unreadable files and an unreachable receiver are warnings. Call it with
 # `if: always()` right after the tests, so a red run is the one that gets recorded.
 #
+# A runner that cannot reach the receiver (a Mac) sets `pack: true` and hands the `packed` output
+# to a later job on one that can, which passes it back as `packed` with `push_url` -- no artifact,
+# no new network path. GitHub caps a job's outputs at 1 MB; past ~768 KB nothing is packed.
+#
 # `push_url` has no default on purpose: this repository is public (ADR-0097), and where the
 # receiver lives is the caller's to say.
 name: test-results
@@ -14,7 +18,30 @@ description: Summarise test result files in the job summary and optionally push 
 inputs:
   files:
     description: Result files or globs, space separated (JUnit XML or jest JSON).
-    required: true
+    required: false
+    default: ''
+  pack:
+    description: Also pack the files into the `packed` output, for a job that can push.
+    required: false
+    default: 'false'
+  packed:
+    description: A `packed` output from another job; its files are read as well.
+    required: false
+    default: ''
+  context:
+    description: Extra KEY=VALUE fields on every line (e.g. platform=ios), one per line.
+    required: false
+    default: ''
+  event:
+    description: >-
+      Stream label pr | main | nightly. Empty = from the trigger; a nightly started with
+      `gh workflow run` is a workflow_dispatch and must say `nightly` itself.
+    required: false
+    default: ''
+  summary:
+    description: Write the job summary block (false in a job that only pushes).
+    required: false
+    default: 'true'
   title:
     description: Heading of the summary block.
     required: false
@@ -32,10 +59,16 @@ inputs:
     required: false
     default: '.'
 
+outputs:
+  packed:
+    description: The result files, packed (only with `pack`).
+    value: ${{ steps.results.outputs.packed }}
+
 runs:
   using: composite
   steps:
     - name: Test results
+      id: results
       shell: bash
       working-directory: ${{ inputs.working_directory }}
       env:
@@ -44,14 +77,23 @@ runs:
         SUITE: ${{ inputs.suite }}
         PUSH_URL: ${{ inputs.push_url }}
         REPO: ${{ github.event.repository.name }}
-        EVENT: ${{ github.event_name == 'pull_request' && 'pr' || (github.event_name == 'schedule' && 'nightly' || github.ref_name == 'main' && 'main' || 'other') }}
+        EVENT: ${{ inputs.event || (github.event_name == 'pull_request' && 'pr' || (github.event_name == 'schedule' && 'nightly' || github.ref_name == 'main' && 'main' || 'other')) }}
         SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         PR: ${{ github.event.pull_request.number }}
+        PACK: ${{ inputs.pack }}
+        PACKED: ${{ inputs.packed }}
+        CONTEXT: ${{ inputs.context }}
+        SUMMARY: ${{ inputs.summary }}
       run: |
         set -uo pipefail
         read -r -a files <<< "$FILES"
-        python3 "$GITHUB_ACTION_PATH/../../test_results.py" "${files[@]}" \
-          --title "$TITLE" --summary "$GITHUB_STEP_SUMMARY" --push-url "$PUSH_URL" \
-          --repo "$REPO" --suite "$SUITE" --event "$EVENT" \
-          --context "sha=$SHA" --context "run_url=$RUN_URL" --context "pr=$PR" || true
+        args=(--title "$TITLE" --push-url "$PUSH_URL" --repo "$REPO" --suite "$SUITE" --event "$EVENT"
+              --context "sha=$SHA" --context "run_url=$RUN_URL" --context "pr=$PR" --packed-env PACKED)
+        while IFS= read -r kv; do [ -z "$kv" ] || args+=(--context "$kv"); done <<< "$CONTEXT"
+        [ "$SUMMARY" != "true" ] || args+=(--summary "$GITHUB_STEP_SUMMARY")
+        [ "$PACK" != "true" ] || args+=(--pack "$RUNNER_TEMP/test-results.packed")
+        python3 "$GITHUB_ACTION_PATH/../../test_results.py" ${files[@]+"${files[@]}"} "${args[@]}" || true
+        if [ "$PACK" = "true" ] && [ -f "$RUNNER_TEMP/test-results.packed" ]; then
+          echo "packed=$(cat "$RUNNER_TEMP/test-results.packed")" >> "$GITHUB_OUTPUT"
+        fi

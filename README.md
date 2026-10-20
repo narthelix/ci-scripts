@@ -104,6 +104,26 @@ detail is JSON in the line). It never fails the job; call it with `if: always()`
           push_url: ${{ vars.TEST_RESULTS_PUSH_URL }}   # the caller's; never a default here
 ```
 
+A runner that cannot reach the receiver (a Mac) packs its results into a job output, and a later
+job on one that can pushes them -- no artifact, no new network path:
+
+```yaml
+  e2e:        # on the Mac
+    outputs: { results: ${{ steps.results.outputs.packed }} }
+    steps:
+      - id: results
+        if: always()
+        uses: narthelix/ci-scripts/actions/test-results@<sha>
+        with: { files: report.xml, suite: e2e, event: nightly, pack: 'true', context: platform=ios }
+  push:       # on a runner that reaches the receiver
+    needs: e2e
+    if: always()
+    steps:
+      - uses: narthelix/ci-scripts/actions/test-results@<sha>
+        with: { packed: ${{ needs.e2e.outputs.results }}, suite: e2e, event: nightly,
+                context: platform=ios, summary: 'false', push_url: <the caller's> }
+```
+
 ### Risk class by effect (narthelix/ops#2055)
 
 `risk_class.py` (run by `actions/risk`) reads each file's diff as well as its

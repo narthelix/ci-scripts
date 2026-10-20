@@ -5,6 +5,9 @@ Reads the result files a test run already wrote and does two things with them:
 
     summary  a Markdown block for the job summary: totals, every failure, the slowest cases
     push     one Loki line per test case (and one per run) to a push URL, when one is given
+    pack     the result files as one compact string, for a job output -- when the job that ran
+             the tests cannot reach the receiver (a Mac runner), a later job that can (an
+             in-cluster runner) unpacks and pushes them. No artifact, no new network path.
 
 Formats, all written by the test runner itself -- no reporter package is added anywhere:
 
@@ -24,9 +27,13 @@ filters on (repo, suite, event, kind). Per-case detail rides in the line, as JSO
 from __future__ import annotations
 
 import argparse
+import base64
+import gzip
+import os
 import glob
 import json
 import sys
+import tempfile
 import time
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -34,6 +41,8 @@ from dataclasses import dataclass
 
 MESSAGE_MAX = 500
 BATCH = 500
+# GitHub caps a job's outputs at 1 MB in total; leave room for the job's other outputs.
+PACK_MAX = 768 * 1024
 
 
 @dataclass
@@ -96,9 +105,36 @@ def read(path: str) -> list[Case]:
     return parse_junit(text)
 
 
+def pack(paths: list[str]) -> str:
+    """The files as base64(gzip(JSON {name: text})); names are basenames, made unique."""
+    files: dict[str, str] = {}
+    for p in paths:
+        name = os.path.basename(p)
+        while name in files:
+            name = "_" + name
+        with open(p, encoding="utf-8") as f:
+            files[name] = f.read()
+    return base64.b64encode(gzip.compress(json.dumps(files).encode(), mtime=0)).decode()
+
+
+def unpack(packed: str, into: str) -> list[str]:
+    files = json.loads(gzip.decompress(base64.b64decode(packed)))
+    out = []
+    for name, text in files.items():
+        path = os.path.join(into, os.path.basename(name))
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+        out.append(path)
+    return out
+
+
+def expand(patterns: list[str]) -> list[str]:
+    return sorted({p for pat in patterns for p in glob.glob(pat, recursive=True)})
+
+
 def collect(patterns: list[str]) -> tuple[list[Case], list[str]]:
     cases, warnings = [], []
-    paths = sorted({p for pat in patterns for p in glob.glob(pat, recursive=True)})
+    paths = expand(patterns)
     if not paths:
         warnings.append(f"no result file matched {' '.join(patterns)}")
     for p in paths:
@@ -175,7 +211,7 @@ def push(url: str, bodies: list[dict], timeout: float = 10) -> str | None:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("files", nargs="+", help="result files or globs (JUnit XML or jest JSON)")
+    ap.add_argument("files", nargs="*", help="result files or globs (JUnit XML or jest JSON)")
     ap.add_argument("--title", default="Tests")
     ap.add_argument("--summary", help="append the Markdown block here ($GITHUB_STEP_SUMMARY)")
     ap.add_argument("--push-url", default="", help="Loki push URL; empty = no push")
@@ -184,11 +220,27 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--event", default="", help="pr | main | nightly (a stream label)")
     ap.add_argument("--context", action="append", default=[], metavar="KEY=VALUE",
                     help="extra field on every line (sha, run_url, ref, platform); repeatable")
+    ap.add_argument("--pack", metavar="FILE", help="also write the files, packed, to FILE")
+    ap.add_argument("--packed-env", metavar="VAR",
+                    help="read packed files from this environment variable (a job output)")
     a = ap.parse_args(argv)
 
-    cases, warnings = collect(a.files)
+    patterns = list(a.files)
+    if a.packed_env and os.environ.get(a.packed_env):
+        try:
+            patterns += unpack(os.environ[a.packed_env], tempfile.mkdtemp())
+        except (ValueError, OSError) as e:
+            print(f"::warning::test-results: packed results unreadable ({e.__class__.__name__})")
+    cases, warnings = collect(patterns)
     for w in warnings:
         print(f"::warning::test-results: {w}")
+    if a.pack:
+        packed = pack(expand(a.files)) if expand(a.files) else ""
+        if len(packed) > PACK_MAX:
+            print(f"::warning::test-results: packed results are {len(packed)} bytes, over {PACK_MAX}; not packed")
+            packed = ""
+        with open(a.pack, "w", encoding="utf-8") as f:
+            f.write(packed)
     block = summary(cases, a.title)
     if a.summary:
         with open(a.summary, "a", encoding="utf-8") as f:
