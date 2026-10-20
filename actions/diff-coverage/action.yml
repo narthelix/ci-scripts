@@ -35,6 +35,10 @@ runs:
         REPORT: ${{ inputs.report }}
         FAIL_UNDER: ${{ inputs.fail_under }}
         BASE_REF: ${{ github.base_ref }}
+        # The fetch below cannot lean on the checkout's credentials: callers check out with
+        # `persist-credentials: false` (zizmor), and a private repo then refuses a plain fetch
+        # (measured: muznara-desktop#45, "could not read Username"). Read-only, this run's own.
+        GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
         if [ ! -f "$REPORT" ]; then
@@ -42,14 +46,15 @@ runs:
           exit 0
         fi
         # A shallow checkout has no merge base with the target branch: fetch it, with history.
+        auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
         if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
-          git fetch --no-tags --quiet --unshallow origin
+          git -c "http.https://github.com/.extraheader=$auth" fetch --no-tags --quiet --unshallow origin
         fi
-        git fetch --no-tags --quiet origin "+refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF"
+        git -c "http.https://github.com/.extraheader=$auth" fetch --no-tags --quiet origin "+refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF"
         # Pinned (10.6.0, 2026-09-22); its own venv so the caller's environment stays untouched.
         python3 -m venv "$RUNNER_TEMP/diff-cover"
         "$RUNNER_TEMP/diff-cover/bin/pip" install --quiet --disable-pip-version-check diff-cover==10.6.0
-        args=("$REPORT" --compare-branch "origin/$BASE_REF" --markdown-report "$RUNNER_TEMP/diff-coverage.md")
+        args=("$REPORT" --compare-branch "origin/$BASE_REF" --format "markdown:$RUNNER_TEMP/diff-coverage.md")
         [ -z "$FAIL_UNDER" ] || args+=(--fail-under "$FAIL_UNDER")
         set +e
         "$RUNNER_TEMP/diff-cover/bin/diff-cover" "${args[@]}" >/dev/null
