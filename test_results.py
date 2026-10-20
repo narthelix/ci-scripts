@@ -5,6 +5,8 @@ Reads the result files a test run already wrote and does two things with them:
 
     summary  a Markdown block for the job summary: totals, every failure, the slowest cases
     push     one Loki line per test case (and one per run) to a push URL, when one is given
+    coverage the line coverage of a coverage report (Cobertura XML or lcov), on the run line --
+             the number the README badge and the dashboard's coverage trend read
     pack     the result files as one compact string, for a job output -- when the job that ran
              the tests cannot reach the receiver (a Mac runner), a later job that can (an
              in-cluster runner) unpacks and pushes them. No artifact, no new network path.
@@ -153,6 +155,29 @@ def totals(cases: list[Case]) -> dict[str, float]:
     return t
 
 
+def coverage_percent(path: str) -> float | None:
+    """Line coverage in percent: Cobertura's root `line-rate` (pytest-cov), or lcov's LH/LF sums
+    (jest, vitest). None when the file is missing or says nothing."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        return None
+    if text.lstrip().startswith("<"):
+        try:
+            rate = ET.fromstring(text).get("line-rate")
+        except ET.ParseError:
+            return None
+        return round(float(rate) * 100, 1) if rate else None
+    found = hit = 0
+    for line in text.splitlines():
+        if line.startswith("LF:"):
+            found += int(line[3:])
+        elif line.startswith("LH:"):
+            hit += int(line[3:])
+    return round(hit * 100 / found, 1) if found else None
+
+
 def summary(cases: list[Case], title: str, slowest: int = 5) -> str:
     t = totals(cases)
     mark = "❌" if t["failed"] else "✅"
@@ -178,10 +203,11 @@ def summary(cases: list[Case], title: str, slowest: int = 5) -> str:
 
 
 def streams(cases: list[Case], labels: dict[str, str], context: dict[str, str],
-            now_ns: int) -> list[dict]:
+            now_ns: int, run_extra: dict | None = None) -> list[dict]:
     """Loki push bodies: a `run` line, then the cases in batches. Distinct nanosecond stamps keep
-    identical lines (same case, same run) from being deduplicated away."""
-    run = {**context, **totals(cases)}
+    identical lines (same case, same run) from being deduplicated away. `run_extra` (coverage)
+    rides on the run line only."""
+    run = {**context, **totals(cases), **(run_extra or {})}
     bodies = [{"streams": [{"stream": {**labels, "kind": "run"},
                             "values": [[str(now_ns), json.dumps(run, ensure_ascii=False)]]}]}]
     for start in range(0, len(cases), BATCH):
@@ -220,6 +246,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--event", default="", help="pr | main | nightly (a stream label)")
     ap.add_argument("--context", action="append", default=[], metavar="KEY=VALUE",
                     help="extra field on every line (sha, run_url, ref, platform); repeatable")
+    ap.add_argument("--coverage", metavar="REPORT",
+                    help="coverage.xml (Cobertura) or lcov.info; its line coverage goes on the run line")
     ap.add_argument("--pack", metavar="FILE", help="also write the files, packed, to FILE")
     ap.add_argument("--packed-env", metavar="VAR",
                     help="read packed files from this environment variable (a job output)")
@@ -241,7 +269,10 @@ def main(argv: list[str] | None = None) -> int:
             packed = ""
         with open(a.pack, "w", encoding="utf-8") as f:
             f.write(packed)
-    block = summary(cases, a.title)
+    cov = coverage_percent(a.coverage) if a.coverage else None
+    if a.coverage and cov is None:
+        print(f"::warning::test-results: no line coverage in {a.coverage}")
+    block = summary(cases, a.title) + (f"\nLine coverage: **{cov}%**\n" if cov is not None else "")
     if a.summary:
         with open(a.summary, "a", encoding="utf-8") as f:
             f.write("\n" + block)
@@ -251,7 +282,8 @@ def main(argv: list[str] | None = None) -> int:
     if a.push_url and cases:
         labels = {k: v for k, v in {"repo": a.repo, "suite": a.suite, "event": a.event}.items() if v}
         context = dict(kv.split("=", 1) for kv in a.context if "=" in kv)
-        err = push(a.push_url, streams(cases, labels, context, time.time_ns()))
+        extra = {"coverage": cov} if cov is not None else {}
+        err = push(a.push_url, streams(cases, labels, context, time.time_ns(), extra))
         print(f"::warning::test-results: {err}" if err else "test-results: pushed")
     return 0
 
