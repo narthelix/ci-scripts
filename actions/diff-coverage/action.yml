@@ -1,0 +1,61 @@
+# Changed-lines coverage on a PR (narthelix/ops#2089 T15; handbook engineering/testing_and_qa.md
+# "Test coverage and visibility" rule 3). Reads the coverage report the caller's tests already
+# wrote -- Python `coverage.xml` (Cobertura) or JS `lcov.info` -- and writes, to the job summary,
+# which lines this PR added or changed and which of them no test ran.
+#
+# A warning by default (`fail_under` empty): the founder's call is to measure first and gate only
+# once the numbers are known. Outside a pull_request it does nothing.
+#
+# The project-wide floor is NOT here: it lives in each repo's own test config (pytest
+# --cov-fail-under, vitest/jest thresholds), next to the number it guards.
+name: diff-coverage
+description: Report (optionally gate) the coverage of the lines a pull request changed.
+
+inputs:
+  report:
+    description: Path to coverage.xml (Cobertura) or lcov.info, relative to the working directory.
+    required: true
+  fail_under:
+    description: Percent below which the step fails. Empty = report only.
+    required: false
+    default: ''
+  working_directory:
+    description: Where the report and the git checkout are (default the workspace).
+    required: false
+    default: '.'
+
+runs:
+  using: composite
+  steps:
+    - name: Changed-lines coverage
+      if: github.event_name == 'pull_request'
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      env:
+        REPORT: ${{ inputs.report }}
+        FAIL_UNDER: ${{ inputs.fail_under }}
+        BASE_REF: ${{ github.base_ref }}
+      run: |
+        set -euo pipefail
+        if [ ! -f "$REPORT" ]; then
+          echo "::warning::diff-coverage: no report at $REPORT -- did the tests run with coverage?"
+          exit 0
+        fi
+        # A shallow checkout has no merge base with the target branch: fetch it, with history.
+        if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+          git fetch --no-tags --quiet --unshallow origin
+        fi
+        git fetch --no-tags --quiet origin "+refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF"
+        # Pinned (10.6.0, 2026-09-22); its own venv so the caller's environment stays untouched.
+        python3 -m venv "$RUNNER_TEMP/diff-cover"
+        "$RUNNER_TEMP/diff-cover/bin/pip" install --quiet --disable-pip-version-check diff-cover==10.6.0
+        args=("$REPORT" --compare-branch "origin/$BASE_REF" --markdown-report "$RUNNER_TEMP/diff-coverage.md")
+        [ -z "$FAIL_UNDER" ] || args+=(--fail-under "$FAIL_UNDER")
+        set +e
+        "$RUNNER_TEMP/diff-cover/bin/diff-cover" "${args[@]}" >/dev/null
+        status=$?
+        set -e
+        { echo; sed 's/^# Diff Coverage/## Changed-lines coverage/' "$RUNNER_TEMP/diff-coverage.md"; } >> "$GITHUB_STEP_SUMMARY"
+        pct=$(grep -oE '\*\*Coverage\*\*: [0-9.]+%' "$RUNNER_TEMP/diff-coverage.md" | grep -oE '[0-9.]+%' || echo "n/a")
+        echo "changed-lines coverage: $pct"
+        exit "$status"

@@ -75,6 +75,19 @@ The required check becomes `gates / gate`.
       require_issue_link: false
 ```
 
+### Changed-lines coverage (narthelix/ops#2089 T15)
+
+`actions/diff-coverage` reads the coverage report a caller's tests already wrote (`coverage.xml`
+or `lcov.info`) and writes, to the job summary, the lines the PR changed that no test ran. Report
+only unless `fail_under` is set; nothing outside a pull_request. The project-wide floor is not
+here -- it is each repo's own pytest/vitest/jest threshold.
+
+```yaml
+      - uses: narthelix/ci-scripts/actions/diff-coverage@<sha>  # vX.Y.Z
+        with:
+          report: coverage/lcov.info   # or coverage.xml
+```
+
 ### Risk class by effect (narthelix/ops#2055)
 
 `risk_class.py` (run by `actions/risk`) reads each file's diff as well as its
