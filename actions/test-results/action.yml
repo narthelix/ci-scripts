@@ -20,6 +20,12 @@ inputs:
     description: Result files or globs, space separated (JUnit XML or jest JSON).
     required: false
     default: ''
+  coverage:
+    description: >-
+      Coverage report (coverage.xml or lcov.info); its line coverage goes on the run line and
+      into the summary. Missing file: a warning.
+    required: false
+    default: ''
   pack:
     description: Also pack the files into the `packed` output, for a job that can push.
     required: false
@@ -85,6 +91,7 @@ runs:
         PACKED: ${{ inputs.packed }}
         CONTEXT: ${{ inputs.context }}
         SUMMARY: ${{ inputs.summary }}
+        COVERAGE: ${{ inputs.coverage }}
       run: |
         set -uo pipefail
         read -r -a files <<< "$FILES"
@@ -93,6 +100,7 @@ runs:
         while IFS= read -r kv; do [ -z "$kv" ] || args+=(--context "$kv"); done <<< "$CONTEXT"
         [ "$SUMMARY" != "true" ] || args+=(--summary "$GITHUB_STEP_SUMMARY")
         [ "$PACK" != "true" ] || args+=(--pack "$RUNNER_TEMP/test-results.packed")
+        [ -z "$COVERAGE" ] || args+=(--coverage "$COVERAGE")
         python3 "$GITHUB_ACTION_PATH/../../test_results.py" ${files[@]+"${files[@]}"} "${args[@]}" || true
         if [ "$PACK" = "true" ] && [ -f "$RUNNER_TEMP/test-results.packed" ]; then
           echo "packed=$(cat "$RUNNER_TEMP/test-results.packed")" >> "$GITHUB_OUTPUT"

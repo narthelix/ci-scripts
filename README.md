@@ -124,6 +124,15 @@ job on one that can pushes them -- no artifact, no new network path:
                 context: platform=ios, summary: 'false', push_url: <the caller's> }
 ```
 
+### README badges (narthelix/ops#2089 T19)
+
+`badge.py LABEL MESSAGE COLOR` writes a flat SVG badge (stdlib). The badges live on each
+repository's `badges` branch, written by an in-cluster job from the test results in Loki, and the
+README links them by the **full** address, `https://github.com/<org>/<repo>/raw/badges/<f>.svg`:
+measured in a private repository, that renders for anyone who can read it, while a relative path
+resolves against the branch being viewed and breaks. `test_results.py --coverage` puts the line
+coverage of `coverage.xml` / `lcov.info` on the run line those badges read.
+
 ### Risk class by effect (narthelix/ops#2055)
 
 `risk_class.py` (run by `actions/risk`) reads each file's diff as well as its

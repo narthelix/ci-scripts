@@ -153,6 +153,22 @@ def main() -> int:
     check("pack: over the output cap is left empty, not red", rc == 0 and out.read_text() == "",
           len(out.read_text()))
 
+    # Coverage: Cobertura (pytest-cov) and lcov (jest, vitest), onto the run line only.
+    cov = write({"coverage.xml": '<?xml version="1.0" ?><coverage line-rate="0.8734" branch-rate="0"></coverage>',
+                 "lcov.info": "TN:\nSF:a.ts\nLF:10\nLH:7\nend_of_record\nSF:b.ts\nLF:30\nLH:30\nend_of_record\n",
+                 "empty.info": "TN:\n"})
+    check("coverage: cobertura line-rate", tr.coverage_percent(str(cov / "coverage.xml")) == 87.3,
+          tr.coverage_percent(str(cov / "coverage.xml")))
+    check("coverage: lcov sums every file", tr.coverage_percent(str(cov / "lcov.info")) == 92.5,
+          tr.coverage_percent(str(cov / "lcov.info")))
+    check("coverage: missing or empty is None",
+          tr.coverage_percent(str(cov / "none.xml")) is None and tr.coverage_percent(str(cov / "empty.info")) is None)
+    bodies = tr.streams(py, {}, {"sha": "s"}, 0, {"coverage": 87.3})
+    run_line = json.loads(bodies[0]["streams"][0]["values"][0][1])
+    case_line = json.loads(bodies[1]["streams"][0]["values"][0][1])
+    check("coverage rides on the run line, not the cases",
+          run_line.get("coverage") == 87.3 and "coverage" not in case_line, (run_line, case_line))
+
     # Never red: no files, a broken file, an unreachable receiver.
     broken = write({"bad.xml": "<testsuite><testcase", "ok.xml": PYTEST})
     rc = tr.main([str(broken / "*.xml"), str(broken / "none-*.xml"),
