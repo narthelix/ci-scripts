@@ -269,6 +269,11 @@ disk (`link`).
   the count for one mistake.
 
 
+**By hand (H) goes stale** (narthelix/ops#2089 T20). An SBTM session report (`sbtm/` path,
+date in the file name: `sbtm/2026-10-21-<charter>.md`) counts in `matrix` for 120 days
+(`--manual-max-age`); after that its cell reads `✗ stale` and the gap names the last session's
+date. A manual check is a fact about the app on the day it ran; the app keeps moving.
+
 ### `storage_usage.py`
 
 Measures what an organisation actually holds in its **shared storage quota**
