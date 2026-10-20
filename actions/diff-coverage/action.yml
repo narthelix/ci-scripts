@@ -47,6 +47,13 @@ runs:
           echo "::warning::diff-coverage: no report at $REPORT -- did the tests run with coverage?"
           exit 0
         fi
+        # The caller's GLOBAL git config is ignored for these fetches: a caller with a private
+        # dependency writes `--global url.ssh://git@github.com/.insteadOf https://github.com/`
+        # (narthelix/.github python-quality, `deploy_key`), and that key opens only the
+        # dependency -- this repository's fetch then died with exit 128 (measured:
+        # muznara-mail-connectors#36; the same trap complexipy hit in #13). The checkout's own
+        # settings live in the repository's LOCAL config, and the header below is explicit.
+        export GIT_CONFIG_GLOBAL=/dev/null
         # A shallow checkout has no merge base with the target branch: fetch it, with history.
         auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
         if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
