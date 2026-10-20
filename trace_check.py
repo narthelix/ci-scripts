@@ -22,6 +22,13 @@ disk: a workspace checkout (`mani run trace-check`, the pre-push hook).
     rules   ids are well-formed, unique, and `Needs:` is valid   (spec repo CI)
     tags    coverage tags are well-formed                        (code repo CI)
     link    tags resolve to a real rule at the right revision    (workspace)
+    matrix  journeys x layers from `[test->cuj~...]` tags        (workspace)
+
+**Critical user journeys** (`cuj`, narthelix/ops#2089 T16, ADR-0098 amended
+2026-10-20) are the fifth type. They are rows of a catalogue table, not
+headings: `| cuj~name~N | journey | risk | U | M | R | H | note |`. A test
+declares the journey it covers with `[test->cuj~name~N]`; the layer comes from
+where that test lives (`layer_of`), so the matrix is generated, never written.
 
 It reports; it never edits.
 """
@@ -33,10 +40,12 @@ import pathlib
 import re
 import sys
 
-TYPES = ("br", "adr", "impl", "test")
-ID = r"(?P<type>br|adr|impl|test)~(?P<name>[a-z0-9][a-z0-9-]*)~(?P<rev>[1-9][0-9]*)"
+TYPES = ("br", "adr", "impl", "test", "cuj")
+ID = r"(?P<type>br|adr|impl|test|cuj)~(?P<name>[a-z0-9][a-z0-9-]*)~(?P<rev>[1-9][0-9]*)"
 ID_RE = re.compile(rf"`{ID}`")
 TAG_RE = re.compile(rf"\[(?P<cover>br|adr|impl|test)->{ID}\]")
+LAYERS = ("U", "M", "R", "H")
+JOURNEY_ROW_RE = re.compile(r"^\|\s*`cuj~(?P<name>[a-z0-9][a-z0-9-]*)~(?P<rev>[1-9][0-9]*)`\s*\|(?P<rest>.*)\|\s*$")
 NEEDS_RE = re.compile(r"^\s*Needs:\s*(?P<list>[a-z, ]+)\s*$", re.M)
 CODE_SUFFIXES = {".py", ".dart", ".ts", ".tsx", ".js", ".sql", ".yaml", ".yml", ".toml", ".md"}
 SKIP_DIRS = {
@@ -121,8 +130,14 @@ def collect_tags(root: pathlib.Path) -> list[dict]:
     return tags
 
 
-def check_link(rules: dict, tags: list[dict]) -> list[str]:
+def check_link(rules: dict, tags: list[dict], journeys: dict | None = None) -> list[str]:
     problems = []
+    # Journey tags resolve against the journey catalogue, not the rule file; with no catalogue
+    # given they are not this check's to judge (a missing rule would be a false "orphaned").
+    jt = [t for t in tags if t["key"].startswith("cuj~")]
+    tags = [t for t in tags if not t["key"].startswith("cuj~")]
+    if journeys is not None:
+        problems += check_journey_tags(journeys, jt)
     covered: dict[str, set[str]] = {}
     # An outdated tag is still an *attempt* at coverage. Reporting "declares
     # Needs: impl but has no impl coverage" on top of "your tag is outdated"
@@ -156,6 +171,114 @@ def check_link(rules: dict, tags: list[dict]) -> list[str]:
                 "coverage. A rule that is deliberately not built yet should not declare it."
             )
     return problems
+
+
+def parse_journeys(paths: list[pathlib.Path]) -> tuple[dict, list[str]]:
+    """{cuj~name: {rev, title, risk, expected: set of layers, where}} from catalogue tables.
+
+    A layer cell of `—` (or `-`) means "not expected at this layer"; anything else means it is.
+    """
+    journeys: dict[str, dict] = {}
+    problems: list[str] = []
+    for path in paths:
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").split("\n"), 1):
+            m = JOURNEY_ROW_RE.match(line)
+            if not m:
+                continue
+            cells = [c.strip() for c in m.group("rest").split("|")]
+            key = f"cuj~{m.group('name')}"
+            if key in journeys:
+                problems.append(f"{path}:{lineno}: duplicate journey id `{key}` (first seen {journeys[key]['where']})")
+                continue
+            if len(cells) < 6:
+                problems.append(f"{path}:{lineno}: `{key}` row needs journey, risk, U, M, R, H cells")
+                continue
+            title, risk, *layer_cells = cells[:6]
+            expected = {layer for layer, cell in zip(LAYERS, layer_cells) if cell not in ("—", "-", "")}
+            journeys[key] = {
+                "rev": int(m.group("rev")),
+                "title": title,
+                "risk": risk.replace("*", ""),
+                "expected": expected,
+                "where": f"{path}:{lineno}",
+            }
+    return journeys, problems
+
+
+def layer_of(where: str) -> str:
+    """The layer a test belongs to, from its path (`repo/path:line` or `path:line`).
+
+    M -- a UI flow against the mock: Maestro (`.maestro*/`) or Playwright (`e2e/*.spec|e2e.ts`).
+    R -- the same against the real backend: a `gercek/` (or `real/`) folder inside those (T13).
+    H -- by hand: an SBTM session report (`sbtm/`).
+    U -- everything else: unit and contract tests, Python included (a backend `tests/e2e/` is a
+         Google "medium" test against our own app and DB, not a UI journey).
+    """
+    path = where.rsplit(":", 1)[0]
+    parts = pathlib.PurePosixPath(path).parts
+    ui = any(p.startswith(".maestro") for p in parts) or (
+        "e2e" in parts and (path.endswith(".spec.ts") or path.endswith(".e2e.ts"))
+    )
+    if "sbtm" in parts:
+        return "H"
+    if ui and ("gercek" in parts or "real" in parts):
+        return "R"
+    if ui:
+        return "M"
+    return "U"
+
+
+def check_journey_tags(journeys: dict, tags: list[dict]) -> list[str]:
+    problems = []
+    for t in tags:
+        j = journeys.get(t["key"])
+        if j is None:
+            problems.append(
+                f"{t['where']}: covers `{t['key']}~{t['rev']}`, which is not in the journey catalogue "
+                "(orphaned — renamed or removed)"
+            )
+        elif t["rev"] != j["rev"]:
+            problems.append(
+                f"{t['where']}: covers `{t['key']}~{t['rev']}` but the journey is at revision "
+                f"{j['rev']} — **outdated**: re-read it, then update the test or bump the tag."
+            )
+    return problems
+
+
+def matrix(journeys: dict, tags: list[dict]) -> str:
+    """Journeys x layers as Markdown, plus the gaps: expected at a layer, no test there."""
+    hits: dict[str, dict[str, list[str]]] = {}
+    for t in tags:
+        j = journeys.get(t["key"])
+        if j is None or t["rev"] != j["rev"]:
+            continue
+        hits.setdefault(t["key"], {}).setdefault(layer_of(t["where"]), []).append(t["where"].rsplit(":", 1)[0])
+    def risk_value(j: dict) -> int:
+        m = re.search(r"=\s*([0-9]+)", j["risk"])
+        return int(m.group(1)) if m else 0
+    rows, gaps = [], []
+    for key, j in sorted(journeys.items(), key=lambda kv: (-risk_value(kv[1]), kv[0])):
+        cells = []
+        for layer in LAYERS:
+            found = sorted(set(hits.get(key, {}).get(layer, [])))
+            if found:
+                cells.append(f"✓ {len(found)}")
+            elif layer in j["expected"]:
+                cells.append("✗")
+                gaps.append(f"- `{key}~{j['rev']}` ({j['title']}, risk {risk_value(j)}): no {layer} test")
+            else:
+                cells.append("—")
+        rows.append(f"| `{key}~{j['rev']}` | {j['title']} | {risk_value(j)} | " + " | ".join(cells) + " |")
+    out = [
+        "| Journey | | Risk | " + " | ".join(LAYERS) + " |",
+        "|---|---|---|" + "---|" * len(LAYERS),
+        *rows,
+        "",
+        f"**Gaps** ({len(gaps)}): expected at a layer, no tagged test there.",
+        "",
+        *(gaps or ["- none"]),
+    ]
+    return "\n".join(out) + "\n"
 
 
 def check_adr_refs(roots: list[pathlib.Path], adr_dirs: list[pathlib.Path]) -> list[str]:
@@ -205,7 +328,8 @@ def check_adr_refs(roots: list[pathlib.Path], adr_dirs: list[pathlib.Path]) -> l
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("mode", choices=["rules", "tags", "link"])
+    ap.add_argument("mode", choices=["rules", "tags", "link", "matrix"])
+    ap.add_argument("--journeys-file", action="append", default=[])
     ap.add_argument("--rules-file", action="append", default=[])
     ap.add_argument("--code-root", action="append", default=[])
     ap.add_argument("--adr-dir", action="append", default=[])
@@ -224,13 +348,35 @@ def main() -> int:
         if not rules and args.mode == "rules":
             problems.append("no rule ids found — is the file using ADR-0098's `br~name~rev`?")
 
+    journeys: dict | None = None
+    if args.journeys_file:
+        paths = [pathlib.Path(p) for p in args.journeys_file]
+        missing = [p for p in paths if not p.is_file()]
+        if missing:
+            sys.exit(f"journeys file(s) not found: {[str(m) for m in missing]}")
+        journeys, journey_problems = parse_journeys(paths)
+        problems += journey_problems
+
     tags: list[dict] = []
-    if args.mode in ("tags", "link"):
+    if args.mode in ("tags", "link", "matrix"):
         for r in args.code_root:
-            tags += collect_tags(pathlib.Path(r).resolve())
+            root = pathlib.Path(r).resolve()
+            for t in collect_tags(root):
+                # `repo/path:line`: the matrix names where a test lives, across repos.
+                t["where"] = f"{root.name}/{t['where']}"
+                tags.append(t)
+
+    if args.mode == "matrix":
+        if journeys is None:
+            sys.exit("matrix needs --journeys-file")
+        problems += check_journey_tags(journeys, [t for t in tags if t["key"].startswith("cuj~")])
+        print(matrix(journeys, tags), end="")
+        for p in problems:
+            print(f"  {p}", file=sys.stderr)
+        return 1 if problems else 0
 
     if args.mode == "link":
-        problems += check_link(rules, tags)
+        problems += check_link(rules, tags, journeys)
         if args.adr_dir:
             problems += check_adr_refs(
                 [pathlib.Path(r).resolve() for r in args.code_root],
@@ -242,6 +388,7 @@ def main() -> int:
             "rules": f"{len(rules)} rule id(s) valid",
             "tags": f"{len(tags)} coverage tag(s) well-formed",
             "link": f"{len(rules)} rule(s), {len(tags)} tag(s) linked",
+            "matrix": "",
         }[args.mode]
         print(f"trace-check ({args.mode}): ok — {detail}")
         return 0

@@ -121,6 +121,44 @@ def main() -> int:
     check("prose mentioning an ADR is not flagged",
           tc.check_adr_refs([prose], [adr / "adr"]), 0)
 
+    # --- journeys (cuj, narthelix/ops#2089 T16) ---------------------------------------------
+    cat = (
+        "| id | Journey | Risk | U | M | R | H | note |\n|---|---|---|---|---|---|---|---|\n"
+        "| `cuj~giris~1` | Sign in | 5×3=**15** | ✓ | ✓ | ✗ | Google | |\n"
+        "| `cuj~vitrin~2` | Showcase | 3×2=**6** | ✓ | ✓ | — | — | |\n"
+    )
+    croot = build({"cat.md": cat})
+    journeys, jp = tc.parse_journeys([croot / "cat.md"])
+    check("catalogue rows parse", jp, 0)
+    check("expected layers read from the cells",
+          [] if journeys["cuj~giris"]["expected"] == {"U", "M", "R", "H"}
+          and journeys["cuj~vitrin"]["expected"] == {"U", "M"} else ["wrong expected"], 0)
+
+    for where, want in [
+        ("muznara-app/.maestro/hesap/giris.yaml:3", "M"),
+        ("muznara-app/.maestro-tv/smoke/x.yaml:1", "M"),
+        ("narthelix-developer/e2e/console-keys.spec.ts:9", "M"),
+        ("muznara-app/.maestro/gercek/giris.yaml:3", "R"),
+        ("ops/docs/sbtm/2026-11-01-ses.md:5", "H"),
+        ("muznara-backend/tests/e2e/test_login.py:12", "U"),
+        ("muznara-app/src/features/auth/api.test.ts:4", "U"),
+    ]:
+        got = tc.layer_of(where)
+        check(f"layer_of {where} = {want}", [] if got == want else [f"got {got}"], 0)
+
+    code = build({
+        "a/.maestro/hesap/giris.yaml": "# [test->cuj~giris~1]\n",
+        "a/src/x.test.ts": "// [test->cuj~giris~1]\n// [test->cuj~vitrin~1]\n// [test->cuj~yok~1]\n",
+    })
+    jtags = tc.collect_tags(code)
+    check("outdated and orphaned journey tags reported",
+          tc.check_journey_tags(journeys, jtags), 2, "outdated")
+    md = tc.matrix(journeys, jtags)
+    check("matrix: covered layers counted, expected-but-missing are gaps",
+          [] if "| ✓ 1 | ✓ 1 | ✗ | ✗ |" in md and "no R test" in md and "no H test" in md
+          and "(Showcase, risk 6): no U test" in md else [md], 0)
+    check("link without a catalogue leaves journey tags alone", tc.check_link({}, jtags), 0)
+
     print(f"\n{'FAILED' if fails else 'all passed'} ({fails} failure(s))")
     return 1 if fails else 0
 
