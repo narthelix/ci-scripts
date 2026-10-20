@@ -36,6 +36,7 @@ It reports; it never edits.
 from __future__ import annotations
 
 import argparse
+import datetime
 import pathlib
 import re
 import sys
@@ -245,8 +246,26 @@ def check_journey_tags(journeys: dict, tags: list[dict]) -> list[str]:
     return problems
 
 
-def matrix(journeys: dict, tags: list[dict]) -> str:
-    """Journeys x layers as Markdown, plus the gaps: expected at a layer, no test there."""
+# A session report by hand (H) counts while it is recent (narthelix/ops#2089 T20): a manual check
+# is a fact about the app on the day it ran, and the app moves. The date comes from the report's
+# file name (`sbtm/2026-10-21-<charter>.md`); a report without one never counts.
+MANUAL_MAX_AGE_DAYS = 120
+DATE_RE = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
+
+
+def report_date(path: str) -> datetime.date | None:
+    m = DATE_RE.search(pathlib.PurePosixPath(path).name)
+    try:
+        return datetime.date(*map(int, m.groups())) if m else None
+    except ValueError:
+        return None
+
+
+def matrix(journeys: dict, tags: list[dict], today: datetime.date | None = None,
+           manual_max_age: int = MANUAL_MAX_AGE_DAYS) -> str:
+    """Journeys x layers as Markdown, plus the gaps: expected at a layer, no test there. An H
+    cell counts only reports newer than `manual_max_age` days; older ones show as stale."""
+    today = today or datetime.date.today()
     hits: dict[str, dict[str, list[str]]] = {}
     for t in tags:
         j = journeys.get(t["key"])
@@ -261,8 +280,17 @@ def matrix(journeys: dict, tags: list[dict]) -> str:
         cells = []
         for layer in LAYERS:
             found = sorted(set(hits.get(key, {}).get(layer, [])))
+            stale = []
+            if layer == "H":
+                dated = [(report_date(f), f) for f in found]
+                found = [f for d, f in dated if d and (today - d).days <= manual_max_age]
+                stale = sorted(d for d, f in dated if f not in found and d)
             if found:
                 cells.append(f"✓ {len(found)}")
+            elif stale and layer in j["expected"]:
+                cells.append("✗ stale")
+                gaps.append(f"- `{key}~{j['rev']}` ({j['title']}, risk {risk_value(j)}): last {layer} session "
+                            f"{stale[-1]}, older than {manual_max_age} days")
             elif layer in j["expected"]:
                 cells.append("✗")
                 gaps.append(f"- `{key}~{j['rev']}` ({j['title']}, risk {risk_value(j)}): no {layer} test")
@@ -333,6 +361,8 @@ def main() -> int:
     ap.add_argument("--rules-file", action="append", default=[])
     ap.add_argument("--code-root", action="append", default=[])
     ap.add_argument("--adr-dir", action="append", default=[])
+    ap.add_argument("--manual-max-age", type=int, default=MANUAL_MAX_AGE_DAYS,
+                    help="matrix: days a by-hand (H) session report counts")
     args = ap.parse_args()
 
     problems: list[str] = []
@@ -370,7 +400,7 @@ def main() -> int:
         if journeys is None:
             sys.exit("matrix needs --journeys-file")
         problems += check_journey_tags(journeys, [t for t in tags if t["key"].startswith("cuj~")])
-        print(matrix(journeys, tags), end="")
+        print(matrix(journeys, tags, manual_max_age=args.manual_max_age), end="")
         for p in problems:
             print(f"  {p}", file=sys.stderr)
         return 1 if problems else 0
