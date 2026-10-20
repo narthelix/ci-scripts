@@ -159,6 +159,29 @@ def main() -> int:
           and "(Showcase, risk 6): no U test" in md else [md], 0)
     check("link without a catalogue leaves journey tags alone", tc.check_link({}, jtags), 0)
 
+    # By hand (H) counts while recent (T20): the report's file-name date, 120 days by default.
+    import datetime
+    hand = build({
+        "ops/docs/sbtm/2026-10-01-giris.md": "<!-- [test->cuj~giris~1] -->\n",
+        "ops/docs/sbtm/2026-01-02-vitrin.md": "<!-- [test->cuj~vitrin~2] -->\n",
+        "ops/docs/sbtm/no-date.md": "<!-- [test->cuj~vitrin~2] -->\n",
+    })
+    htags = tc.collect_tags(hand)
+    day = datetime.date(2026, 10, 21)
+    giris_row = lambda md: next(l for l in md.splitlines() if l.startswith("| `cuj~giris~1`"))
+    md = tc.matrix(journeys, htags, today=day)
+    check("H: a recent session counts", [] if giris_row(md).endswith("| ✓ 1 |") else [giris_row(md)], 0)
+    md = tc.matrix(journeys, htags, today=datetime.date(2027, 3, 1))
+    check("H: an old session is stale, and a gap with its date",
+          [] if giris_row(md).endswith("| ✗ stale |") and "last H session 2026-10-01, older than 120 days" in md
+          else [md], 0)
+    md = tc.matrix(journeys, htags, today=day)
+    check("H: not expected stays '—' even with old or undated reports",
+          [] if next(l for l in md.splitlines() if l.startswith("| `cuj~vitrin~2`")).endswith("| — |") else [md], 0)
+    check("report_date: from the name, invalid dates ignored",
+          [] if tc.report_date("x/2026-10-01-a.md") == datetime.date(2026, 10, 1)
+          and tc.report_date("x/2026-13-40-a.md") is None and tc.report_date("x/a.md") is None else ["bad"], 0)
+
     print(f"\n{'FAILED' if fails else 'all passed'} ({fails} failure(s))")
     return 1 if fails else 0
 
