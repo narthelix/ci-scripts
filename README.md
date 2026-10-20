@@ -88,6 +88,22 @@ here -- it is each repo's own pytest/vitest/jest threshold.
           report: coverage/lcov.info   # or coverage.xml
 ```
 
+### Test results as data (narthelix/ops#2089 T17)
+
+`test_results.py` / `actions/test-results` read the result files a test run already wrote --
+JUnit XML (pytest `--junitxml`, vitest `--reporter=junit`, Playwright, Maestro `--format junit`)
+or jest's `--json` -- and write totals, failures and the slowest cases to the job summary. With
+`push_url`, every case also becomes one Loki line (labels `repo`, `suite`, `event`, `kind`; the
+detail is JSON in the line). It never fails the job; call it with `if: always()`.
+
+```yaml
+      - if: always()
+        uses: narthelix/ci-scripts/actions/test-results@<sha>  # vX.Y.Z
+        with:
+          files: test-results/*.xml
+          push_url: ${{ vars.TEST_RESULTS_PUSH_URL }}   # the caller's; never a default here
+```
+
 ### Risk class by effect (narthelix/ops#2055)
 
 `risk_class.py` (run by `actions/risk`) reads each file's diff as well as its
