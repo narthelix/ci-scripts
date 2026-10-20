@@ -1,0 +1,57 @@
+# Test results become data (narthelix/ops#2089 T17; handbook engineering/testing_and_qa.md
+# "Test coverage and visibility"). Reads the result files the caller's test run already wrote --
+# JUnit XML (pytest, vitest, Playwright, Maestro) or jest's --json -- writes totals, failures and
+# the slowest cases to the job summary, and, when `push_url` is given, one Loki line per case.
+#
+# Never fails the job: unreadable files and an unreachable receiver are warnings. Call it with
+# `if: always()` right after the tests, so a red run is the one that gets recorded.
+#
+# `push_url` has no default on purpose: this repository is public (ADR-0097), and where the
+# receiver lives is the caller's to say.
+name: test-results
+description: Summarise test result files in the job summary and optionally push them to Loki.
+
+inputs:
+  files:
+    description: Result files or globs, space separated (JUnit XML or jest JSON).
+    required: true
+  title:
+    description: Heading of the summary block.
+    required: false
+    default: Tests
+  suite:
+    description: Stream label -- unit | e2e | ...
+    required: false
+    default: unit
+  push_url:
+    description: Loki push URL. Empty = summary only.
+    required: false
+    default: ''
+  working_directory:
+    description: Where the files are (default the workspace).
+    required: false
+    default: '.'
+
+runs:
+  using: composite
+  steps:
+    - name: Test results
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      env:
+        FILES: ${{ inputs.files }}
+        TITLE: ${{ inputs.title }}
+        SUITE: ${{ inputs.suite }}
+        PUSH_URL: ${{ inputs.push_url }}
+        REPO: ${{ github.event.repository.name }}
+        EVENT: ${{ github.event_name == 'pull_request' && 'pr' || (github.event_name == 'schedule' && 'nightly' || github.ref_name == 'main' && 'main' || 'other') }}
+        SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        PR: ${{ github.event.pull_request.number }}
+      run: |
+        set -uo pipefail
+        read -r -a files <<< "$FILES"
+        python3 "$GITHUB_ACTION_PATH/../../test_results.py" "${files[@]}" \
+          --title "$TITLE" --summary "$GITHUB_STEP_SUMMARY" --push-url "$PUSH_URL" \
+          --repo "$REPO" --suite "$SUITE" --event "$EVENT" \
+          --context "sha=$SHA" --context "run_url=$RUN_URL" --context "pr=$PR" || true

@@ -37,6 +37,7 @@ jobs:
       - run: python3 test_storage_usage.py
       - run: python3 test_risk_class.py
       - run: python3 test_tf_plan_risk.py
+      - run: python3 test_test_results.py
       # Eat our own cooking: the checker runs against this repository too.
       - run: python3 docs_check.py --root .
 
