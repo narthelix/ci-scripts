@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import http.server
 import json
+import os
 import pathlib
 import sys
 import tempfile
@@ -126,6 +127,31 @@ def main() -> int:
           and labels[0] == {"repo": "r", "suite": "e2e", "event": "nightly", "kind": "run"}
           and json.loads(Sink.bodies[0]["streams"][0]["values"][0][1])["platform"] == "ios",
           (rc, labels))
+
+    # Pack on one runner, unpack and push on another (a Mac job's output -> an in-cluster job).
+    twin = write({"a/report.xml": MAESTRO, "b/report.xml": PYTEST})
+    out = d / "packed.txt"
+    rc = tr.main([str(twin / "*/report.xml"), "--pack", str(out)])
+    packed = out.read_text()
+    unpacked = tr.unpack(packed, tempfile.mkdtemp())
+    check("pack: same basename twice keeps both", rc == 0 and len(unpacked) == 2, unpacked)
+    os.environ["T17_PACKED"] = packed
+    Sink.bodies = []
+    srv = http.server.HTTPServer(("127.0.0.1", 0), Sink)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    rc = tr.main(["--packed-env", "T17_PACKED", "--push-url",
+                  f"http://127.0.0.1:{srv.server_port}/loki/api/v1/push"])
+    srv.shutdown()
+    run = json.loads(Sink.bodies[0]["streams"][0]["values"][0][1]) if Sink.bodies else {}
+    check("unpack: every case of both files pushed", rc == 0 and run.get("total") == 5, run)
+    os.environ["T17_PACKED"] = "not base64 gzip"
+    check("unpack: garbage is a warning, not red", tr.main(["--packed-env", "T17_PACKED"]) == 0)
+    big = write({"big.xml": "<testsuite>" + "".join(
+        f'<testcase name="{i}" time="1"><failure message="{os.urandom(200).hex()}"/></testcase>'
+        for i in range(3000)) + "</testsuite>"})
+    rc = tr.main([str(big / "big.xml"), "--pack", str(out)])
+    check("pack: over the output cap is left empty, not red", rc == 0 and out.read_text() == "",
+          len(out.read_text()))
 
     # Never red: no files, a broken file, an unreachable receiver.
     broken = write({"bad.xml": "<testsuite><testcase", "ok.xml": PYTEST})
