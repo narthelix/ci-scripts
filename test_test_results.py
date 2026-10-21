@@ -188,7 +188,8 @@ def main() -> int:
           and merged[1].message == "Element not found" and merged[1].seconds == 70.0,
           [(c.name, c.status, c.message, c.seconds) for c in merged])
     still = tr.merge_reruns(tr.parse_junit(MAESTRO) + tr.parse_junit(MAESTRO))
-    check("rerun: failed twice stays failed", [c.status for c in still].count("failed") == 2, still)
+    check("rerun: failed twice is one failed case; repeated passes untouched",
+          [c.status for c in still] == ["passed", "failed", "passed"], [(c.name, c.status) for c in still])
     block = tr.summary(jf, "Unit")
     check("summary: flaky column and list",
           "| flaky |" in block and "**Flaky**" in block and "`flips`" in block and block.startswith("## ❌"), block)

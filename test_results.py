@@ -156,9 +156,10 @@ def collect(patterns: list[str]) -> tuple[list[Case], list[str]]:
 
 
 def merge_reruns(cases: list[Case]) -> list[Case]:
-    """A case that appears more than once (a rerun of the failed ones, in a second file) and
-    both failed and passed becomes one `flaky` case carrying the failure's message. Anything else
-    is left exactly as it came."""
+    """A case that appears more than once with a failure among its runs is a rerun of the failed
+    ones (a second file): failed then passed is one `flaky` case carrying the failure's message,
+    failed both times is one `failed` case -- counted once, not twice. Anything else (repeated
+    names that all passed) is left exactly as it came."""
     groups: dict[tuple[str, str], list[Case]] = {}
     for c in cases:
         groups.setdefault((c.name, c.file), []).append(c)
@@ -167,11 +168,14 @@ def merge_reruns(cases: list[Case]) -> list[Case]:
         key = (c.name, c.file)
         runs = groups[key]
         statuses = {r.status for r in runs}
-        if len(runs) > 1 and "failed" in statuses and statuses & {"passed", "flaky"}:
+        if len(runs) > 1 and "failed" in statuses:
             if key not in done:
                 done.add(key)
                 failure = next(r for r in runs if r.status == "failed")
-                out.append(Case(c.name, c.file, "flaky", sum(r.seconds for r in runs), failure.message))
+                last = runs[-1]
+                status = "flaky" if statuses & {"passed", "flaky"} else "failed"
+                message = failure.message if status == "flaky" else last.message
+                out.append(Case(c.name, c.file, status, sum(r.seconds for r in runs), message))
             continue
         out.append(c)
     return out
