@@ -8,7 +8,9 @@
 # auto-merge. The class is computed from the changed paths, never chosen by
 # the author. It runs for bot PRs too -- Renovate's own automerge still
 # governs those, the label only records the class. It never fails the job: a
-# labelling error must not turn every PR red.
+# labelling error must not turn every PR red. One exception: a PR escalated to
+# Ask while auto-merge was being enabled, when turning it back off fails --
+# then a red gate is the only thing between that PR and a merge.
 #
 # `risk_class.py` comes from this action's own checkout -- the commit the
 # caller pinned. It used to be fetched by a separately pinned `risk_script_ref`
@@ -120,8 +122,31 @@ runs:
         NUM: ${{ github.event.pull_request.number }}
         CLS: ${{ steps.risk.outputs.class }}
       run: |
-        if gh pr merge "$NUM" -R "$REPO" --auto --squash --delete-branch; then
-          echo "::notice::risk:${CLS} -- auto-merge enabled; merges when every required check is green"
-        else
-          echo "::warning::could not enable auto-merge (branch protection / allow_auto_merge?)"
+        set -uo pipefail
+        # The plan job (actions/plan-risk) can escalate this PR to Ask while gates
+        # run: read the LIVE labels before enabling, and again after -- an
+        # escalation that landed in between turns the merge back off. Fail closed:
+        # labels that cannot be read count as Ask.
+        ask() {
+          l=$(gh api "repos/${REPO}/issues/${NUM}/labels" --jq '[.[].name] | join(",")') || return 0
+          case ",$l," in *,risk:ask,*|*,risk:escalated,*) return 0 ;; esac
+          return 1
+        }
+        if ask; then
+          echo "::notice::PR is now Ask -- auto-merge not enabled"
+          exit 0
         fi
+        # No --delete-branch: every repository deletes merged branches itself
+        # (delete_branch_on_merge, infra-terraform), and with a merge queue gh
+        # refuses the flag -- the whole call failed on gitops (narthelix/ops#2089 T24).
+        if ! gh pr merge "$NUM" -R "$REPO" --auto --squash; then
+          echo "::warning::could not enable auto-merge (branch protection / allow_auto_merge?)"
+          exit 0
+        fi
+        if ask; then
+          gh pr merge "$NUM" -R "$REPO" --disable-auto \
+            || { echo "::error::PR became Ask while auto-merge was enabled, and disabling failed"; exit 1; }
+          echo "::notice::PR became Ask meanwhile -- auto-merge turned back off"
+          exit 0
+        fi
+        echo "::notice::risk:${CLS} -- auto-merge enabled; merges when every required check is green"

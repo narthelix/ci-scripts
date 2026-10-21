@@ -146,8 +146,12 @@ that set `risk_floor: show`. Call it from the plan job (`mode: pr`, the job
 must be a required check) and from the apply job before applying
 (`mode: apply`). A plan that destroys, replaces, changes an access-related
 resource or cannot be read escalates the PR to Ask and turns auto-merge off;
-at apply time the same plan behind a non-Ask PR fails the job before anything
-is applied.
+at apply time the same plan behind a non-Ask PR, or behind an Ask PR a bot
+merged, fails the job before anything is applied. Pass the merger App's
+`merger_client_id` / `merger_private_key` to `mode: pr`: the merger enabled the
+auto-merge and the plan job's `GITHUB_TOKEN` (`contents: read`) cannot turn it
+off. Whatever the token, the plan job is red while auto-merge stays on -- until
+v0.21.0 the disable was silent and six escalated PRs merged themselves.
 
 
 **Flaky tests (handbook ADR-0141).** `test_results.py` reports a case that failed and then passed
