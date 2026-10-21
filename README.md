@@ -149,6 +149,25 @@ resource or cannot be read escalates the PR to Ask and turns auto-merge off;
 at apply time the same plan behind a non-Ask PR fails the job before anything
 is applied.
 
+
+**Flaky tests (handbook ADR-0141).** `test_results.py` reports a case that failed and then passed
+on the runner's single retry as `flaky`, never `passed` -- jest marks it itself
+(`jest.retryTimes(1)` sets `invocations` > 1), and a runner that retries by rerunning the failed
+cases into a second result file is merged: failed, then passed, is one `flaky` case.
+`quarantine.py` / `actions/quarantine` read a repository's `.github/quarantine.json` (name, file,
+issue, owner, `until` at most 30 days out): the step is red when an entry has run out, and its
+outputs give the gating run a `--testNamePattern` that leaves the quarantined tests out and a
+non-blocking run one that runs only them. Pass the pattern through `env:`, never inline in
+`run:` -- it is a regex built from test names.
+
+```yaml
+      - id: quarantine
+        uses: narthelix/ci-scripts/actions/quarantine@<sha>  # vX.Y.Z
+      - env:
+          EXCLUDE: ${{ steps.quarantine.outputs.exclude }}
+        run: npx jest ${EXCLUDE:+--testNamePattern "$EXCLUDE"}
+```
+
 ## Tools
 
 ### `docs_check.py`

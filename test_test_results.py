@@ -91,7 +91,7 @@ def main() -> int:
 
     md = tr.summary(cases, "Unit")
     check("summary: red mark, counts, failures listed",
-          md.startswith("## ❌ Unit") and "| 8 | 3 | 3 | 2 |" in md and "`kopru` (kopru) — Element not found" in md,
+          md.startswith("## ❌ Unit") and "| 8 | 3 | 3 | 0 | 2 |" in md and "`kopru` (kopru) — Element not found" in md,
           md)
     check("summary: green when nothing failed",
           tr.summary(py[:1], "Unit").startswith("## ✅"), tr.summary(py[:1], "Unit"))
@@ -168,6 +168,35 @@ def main() -> int:
     case_line = json.loads(bodies[1]["streams"][0]["values"][0][1])
     check("coverage rides on the run line, not the cases",
           run_line.get("coverage") == 87.3 and "coverage" not in case_line, (run_line, case_line))
+
+    # Flaky (ADR-0141): jest's own retry marking, and a rerun file merged into one case.
+    jf = tr.parse_jest({"testResults": [{"name": "/r/a.test.ts", "assertionResults": [
+        {"ancestorTitles": [], "title": "flips", "status": "passed", "duration": 5,
+         "invocations": 2, "retryReasons": ["Expected 2\nReceived 1"], "failureMessages": []},
+        {"ancestorTitles": [], "title": "steady", "status": "passed", "duration": 5, "invocations": 1},
+        {"ancestorTitles": [], "title": "red twice", "status": "failed", "duration": 5, "invocations": 2,
+         "retryReasons": ["x"], "failureMessages": ["Expected 1"]},
+    ]}]})
+    check("jest: pass on retry is flaky, with the first failure as message",
+          [c.status for c in jf] == ["flaky", "passed", "failed"] and jf[0].message.startswith("Expected 2"),
+          [(c.status, c.message) for c in jf])
+    rerun = """<testsuites><testsuite><testcase name="kopru" classname="kopru" time="30.0"/></testsuite></testsuites>"""
+    rr = write({"first.xml": MAESTRO, "rerun.xml": rerun})
+    merged = tr.merge_reruns(tr.collect([str(rr / "*.xml")])[0])
+    check("rerun: failed then passed is one flaky case, others untouched",
+          [(c.name, c.status) for c in merged] == [("giris", "passed"), ("kopru", "flaky")]
+          and merged[1].message == "Element not found" and merged[1].seconds == 70.0,
+          [(c.name, c.status, c.message, c.seconds) for c in merged])
+    still = tr.merge_reruns(tr.parse_junit(MAESTRO) + tr.parse_junit(MAESTRO))
+    check("rerun: failed twice is one failed case; repeated passes untouched",
+          [c.status for c in still] == ["passed", "failed", "passed"], [(c.name, c.status) for c in still])
+    block = tr.summary(jf, "Unit")
+    check("summary: flaky column and list",
+          "| flaky |" in block and "**Flaky**" in block and "`flips`" in block and block.startswith("## ❌"), block)
+    check("summary: flaky alone is a warning mark, not red",
+          tr.summary(jf[:2], "Unit").startswith("## ⚠️"))
+    check("totals: flaky counted apart from passed",
+          tr.totals(jf)["flaky"] == 1 and tr.totals(jf)["passed"] == 1, tr.totals(jf))
 
     # Never red: no files, a broken file, an unreachable receiver.
     broken = write({"bad.xml": "<testsuite><testcase", "ok.xml": PYTEST})
