@@ -8,10 +8,15 @@
 #                  unreadable plan escalates the PR to Ask: label
 #                  `risk:escalated` + `risk:ask`, auto-merge OFF. Runs inside
 #                  the plan job, which the caller makes a REQUIRED check, so the
-#                  escalation lands before auto-merge could fire.
+#                  escalation lands before auto-merge could fire. The job FAILS
+#                  when auto-merge is still on afterwards: a red required check
+#                  merges nothing (infra-terraform#137, 2026-10-21 -- the
+#                  disable was swallowed and the merger merged an Ask PR).
 #   mode=apply  -- the merge-time plan can differ from the PR's. If it is Ask
-#                  and the merged PR was not `risk:ask`, the job FAILS before
-#                  anything is applied: a stale Show plan never applies a delete.
+#                  and the merged PR was not `risk:ask`, or was merged by a bot,
+#                  the job FAILS before anything is applied: a stale Show plan
+#                  never applies a delete, and neither does an Ask PR the founder
+#                  never merged.
 name: plan-risk
 description: Escalate a Terraform PR to Ask on a risky plan; refuse a risky apply behind a Show merge.
 
@@ -24,6 +29,16 @@ inputs:
     required: true
   sensitive:
     description: Optional regex over resource types that count as access-related (replaces the default).
+    required: false
+    default: ''
+  merger_client_id:
+    description: >-
+      Client ID of the merger App (mode=pr). Its token turns auto-merge off: the merger
+      enabled it, and the plan job's GITHUB_TOKEN (contents: read) cannot disable it.
+    required: false
+    default: ''
+  merger_private_key:
+    description: Private key of the merger App (mode=pr).
     required: false
     default: ''
 
@@ -54,22 +69,49 @@ runs:
         echo "class=$cls" >> "$GITHUB_OUTPUT"
         { echo "### Plan risk: \`$cls\` (ADR-0128)"; sed -n 's/^reason=/- /p' <<< "$out"; } >> "$GITHUB_STEP_SUMMARY"
 
+    - name: Mint merger token (mode=pr)
+      id: merger
+      if: >-
+        inputs.mode == 'pr' && steps.classify.outputs.class == 'ask' &&
+        github.event_name == 'pull_request' && inputs.merger_client_id != ''
+      continue-on-error: true
+      uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+      with:
+        client-id: ${{ inputs.merger_client_id }}
+        private-key: ${{ inputs.merger_private_key }}
+        repositories: ${{ github.event.repository.name }}
+        permission-contents: write
+        permission-pull-requests: write
+
     - name: Escalate the PR (mode=pr)
       if: inputs.mode == 'pr' && steps.classify.outputs.class == 'ask' && github.event_name == 'pull_request'
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
+        MERGER_TOKEN: ${{ steps.merger.outputs.token }}
         REPO: ${{ github.repository }}
         NUM: ${{ github.event.pull_request.number }}
       run: |
-        # Auto-merge off FIRST: the labels are the record, this is the gate.
-        gh pr merge "$NUM" -R "$REPO" --disable-auto >/dev/null 2>&1 || true
+        # Labels FIRST: `actions/risk` re-reads them around its own enable, so an
+        # enable racing this step turns itself off. Then auto-merge off, then CHECK:
+        # the labels are the record, the check is the gate.
         gh label create risk:escalated -R "$REPO" --color b60205 \
           --description "ADR-0128: raised to Ask by an automated check" 2>/dev/null || true
         gh pr edit "$NUM" -R "$REPO" --remove-label risk:ship --remove-label risk:show >/dev/null 2>&1 || true
         gh pr edit "$NUM" -R "$REPO" --add-label risk:escalated --add-label risk:ask >/dev/null \
           || { echo "::error::could not escalate the PR to Ask"; exit 1; }
-        echo "::notice::plan is Ask -- auto-merge disabled; the founder merges this one"
+        auto() { gh pr view "$NUM" -R "$REPO" --json autoMergeRequest --jq '.autoMergeRequest != null'; }
+        on=$(auto) || { echo "::error::could not read the PR's auto-merge state"; exit 1; }
+        if [ "$on" = true ]; then
+          GH_TOKEN="${MERGER_TOKEN:-$GH_TOKEN}" gh pr merge "$NUM" -R "$REPO" --disable-auto \
+            || echo "::warning::disabling auto-merge failed (see above)"
+          on=$(auto) || on=unknown
+        fi
+        if [ "$on" != false ]; then
+          echo "::error::plan is Ask but auto-merge is still ON -- this red required check is what stops the merge. Turn it off by hand (gh pr merge $NUM --disable-auto), then re-run."
+          exit 1
+        fi
+        echo "::notice::plan is Ask -- auto-merge off (checked); the founder merges this one"
 
     - name: Refuse a risky apply behind a Show merge (mode=apply)
       if: inputs.mode == 'apply' && steps.classify.outputs.class == 'ask'
@@ -79,10 +121,18 @@ runs:
         REPO: ${{ github.repository }}
         SHA: ${{ github.sha }}
       run: |
-        labels=$(gh api "repos/${REPO}/commits/${SHA}/pulls" --jq '.[0].labels[].name' 2>/dev/null || true)
-        if grep -qx 'risk:ask' <<< "$labels"; then
-          echo "::notice::risky plan, but the merged PR was Ask -- the founder approved it"
-          exit 0
-        fi
+        num=$(gh api "repos/${REPO}/commits/${SHA}/pulls" --jq '.[0].number // empty' 2>/dev/null || true)
+        pr=$( [ -n "$num" ] && gh api "repos/${REPO}/pulls/${num}" \
+          --jq '([.labels[].name] | index("risk:ask") != null | tostring) + " " + (.merged_by.type // "?")' 2>/dev/null || true)
+        # `merged_by` on a commits/pulls listing is always null; the PR itself has it.
+        # An Ask PR merged by a bot is the gate failing, not the founder approving.
+        case "$pr" in
+          "true User")
+            echo "::notice::risky plan, but the merged PR was Ask and a person merged it -- the founder approved it"
+            exit 0 ;;
+          "true "*)
+            echo "::error::the merged PR was Ask but merged by '${pr#true }', not a person -- nothing applied."
+            exit 1 ;;
+        esac
         echo "::error::the merge-time plan is Ask (see the summary) but the merged PR was not -- nothing applied. Open a PR so the founder can review the plan."
         exit 1
