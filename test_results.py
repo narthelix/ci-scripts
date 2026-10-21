@@ -16,6 +16,11 @@ Formats, all written by the test runner itself -- no reporter package is added a
     JUnit XML   pytest --junitxml, vitest --reporter=junit, Playwright, Maestro --format junit
     jest JSON   jest --json --outputFile (jest has no built-in JUnit reporter)
 
+**Flaky is its own status** (handbook ADR-0141). A case that failed and then passed on the
+runner's one retry is `flaky`, never `passed`: jest marks it itself (`invocations` > 1, measured
+with `jest.retryTimes(1)`), and a runner that retries by running the failed cases again -- a
+second result file -- is merged here: the same case failed, then passed, is one `flaky` case.
+
 **Never fails the build.** A result file that cannot be read, or a push that does not arrive, is
 a warning. The tests' own exit code is the gate; this only makes their outcome visible, and a
 visibility tool that turns CI red is one that gets switched off.
@@ -51,7 +56,7 @@ PACK_MAX = 768 * 1024
 class Case:
     name: str
     file: str
-    status: str  # passed | failed | skipped
+    status: str  # passed | failed | skipped | flaky
     seconds: float
     message: str = ""
 
@@ -89,12 +94,15 @@ def parse_jest(data: dict) -> list[Case]:
     for suite in data.get("testResults", []):
         for a in suite.get("assertionResults", []):
             status = {"passed": "passed", "failed": "failed"}.get(a.get("status"), "skipped")
+            message = "\n".join(a.get("failureMessages") or [])
+            if status == "passed" and (a.get("invocations") or 1) > 1:
+                status, message = "flaky", "\n".join(a.get("retryReasons") or [])
             cases.append(Case(
                 name=" › ".join([*a.get("ancestorTitles", []), a.get("title", "?")]),
                 file=suite.get("name", ""),
                 status=status,
                 seconds=(a.get("duration") or 0) / 1000,
-                message=_short("\n".join(a.get("failureMessages") or [])),
+                message=_short(message),
             ))
     return cases
 
@@ -147,8 +155,30 @@ def collect(patterns: list[str]) -> tuple[list[Case], list[str]]:
     return cases, warnings
 
 
+def merge_reruns(cases: list[Case]) -> list[Case]:
+    """A case that appears more than once (a rerun of the failed ones, in a second file) and
+    both failed and passed becomes one `flaky` case carrying the failure's message. Anything else
+    is left exactly as it came."""
+    groups: dict[tuple[str, str], list[Case]] = {}
+    for c in cases:
+        groups.setdefault((c.name, c.file), []).append(c)
+    out, done = [], set()
+    for c in cases:
+        key = (c.name, c.file)
+        runs = groups[key]
+        statuses = {r.status for r in runs}
+        if len(runs) > 1 and "failed" in statuses and statuses & {"passed", "flaky"}:
+            if key not in done:
+                done.add(key)
+                failure = next(r for r in runs if r.status == "failed")
+                out.append(Case(c.name, c.file, "flaky", sum(r.seconds for r in runs), failure.message))
+            continue
+        out.append(c)
+    return out
+
+
 def totals(cases: list[Case]) -> dict[str, float]:
-    t = {"total": len(cases), "passed": 0, "failed": 0, "skipped": 0}
+    t = {"total": len(cases), "passed": 0, "failed": 0, "skipped": 0, "flaky": 0}
     for c in cases:
         t[c.status] += 1
     t["seconds"] = round(sum(c.seconds for c in cases), 1)
@@ -180,18 +210,24 @@ def coverage_percent(path: str) -> float | None:
 
 def summary(cases: list[Case], title: str, slowest: int = 5) -> str:
     t = totals(cases)
-    mark = "❌" if t["failed"] else "✅"
+    mark = "❌" if t["failed"] else "⚠️" if t["flaky"] else "✅"
     out = [
         f"## {mark} {title}",
         "",
-        "| total | passed | failed | skipped | time |",
-        "|---:|---:|---:|---:|---:|",
-        f"| {t['total']} | {t['passed']} | {t['failed']} | {t['skipped']} | {t['seconds']} s |",
+        "| total | passed | failed | flaky | skipped | time |",
+        "|---:|---:|---:|---:|---:|---:|",
+        f"| {t['total']} | {t['passed']} | {t['failed']} | {t['flaky']} | {t['skipped']} | {t['seconds']} s |",
     ]
     failed = [c for c in cases if c.status == "failed"]
     if failed:
         out += ["", "**Failed**", ""]
         for c in failed:
+            first = c.message.splitlines()[0] if c.message else ""
+            out.append(f"- `{c.name}` ({c.file})" + (f" — {first}" if first else ""))
+    flaky = [c for c in cases if c.status == "flaky"]
+    if flaky:
+        out += ["", "**Flaky** — failed, then passed on the retry (ADR-0141)", ""]
+        for c in flaky:
             first = c.message.splitlines()[0] if c.message else ""
             out.append(f"- `{c.name}` ({c.file})" + (f" — {first}" if first else ""))
     slow = sorted((c for c in cases if c.seconds > 0), key=lambda c: -c.seconds)[:slowest]
@@ -260,6 +296,7 @@ def main(argv: list[str] | None = None) -> int:
         except (ValueError, OSError) as e:
             print(f"::warning::test-results: packed results unreadable ({e.__class__.__name__})")
     cases, warnings = collect(patterns)
+    cases = merge_reruns(cases)
     for w in warnings:
         print(f"::warning::test-results: {w}")
     if a.pack:
@@ -277,7 +314,7 @@ def main(argv: list[str] | None = None) -> int:
         with open(a.summary, "a", encoding="utf-8") as f:
             f.write("\n" + block)
     t = totals(cases)
-    print(f"test-results: {t['total']} case(s), {t['failed']} failed, {t['skipped']} skipped")
+    print(f"test-results: {t['total']} case(s), {t['failed']} failed, {t['flaky']} flaky, {t['skipped']} skipped")
 
     if a.push_url and cases:
         labels = {k: v for k, v in {"repo": a.repo, "suite": a.suite, "event": a.event}.items() if v}
