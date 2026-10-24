@@ -24,8 +24,8 @@ runs:
         # pinned, sha256-checked download below.
         if shellcheck --version 2>/dev/null | grep -q 'version: 0.11.0' \
            && hadolint --version 2>/dev/null | grep -q ' 2.14.0' \
-           && semgrep --version 2>/dev/null | grep -qx '1.177.0'; then
-          echo "araclar imajda (shellcheck 0.11.0, hadolint 2.14.0, semgrep 1.177.0) -- indirme yok"
+           && semgrep --version 2>/dev/null | grep -qx '1.182.1'; then
+          echo "araclar imajda (shellcheck 0.11.0, hadolint 2.14.0, semgrep 1.182.1) -- indirme yok"
           exit 0
         fi
         bin="$RUNNER_TEMP/bin"; mkdir -p "$bin"; cd "$RUNNER_TEMP"
@@ -44,7 +44,7 @@ runs:
         echo "$hl_sha  $hl" | sha256sum -c -
         tar -xzf "$sc" && mv shellcheck-v0.11.0/shellcheck "$bin/"
         install -m 0755 "$hl" "$bin/hadolint"
-        python3 -m venv "$RUNNER_TEMP/sg" && "$RUNNER_TEMP/sg/bin/pip" install --quiet --only-binary :all: semgrep==1.177.0
+        python3 -m venv "$RUNNER_TEMP/sg" && "$RUNNER_TEMP/sg/bin/pip" install --quiet --only-binary :all: semgrep==1.182.1
         ln -s "$RUNNER_TEMP/sg/bin/semgrep" "$bin/semgrep"
         echo "$bin" >> "$GITHUB_PATH"
 
