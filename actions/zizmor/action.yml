@@ -86,6 +86,15 @@ runs:
         # workflow that is not valid YAML was only a WARN, zizmor exited 0 and the
         # gate went green on a file GitHub refused to run ("workflow file issue").
         # Strict, it is exit 1 -- the error below. All 33 repos collected clean.
+        # ⚠ Nothing to audit is not an error (narthelix/ops#2170 U12, measured on flags#27
+        # and local-env#31): since the org gate runs as a required workflow, a repository
+        # may carry no workflow file at all, and zizmor then exits 1 (no .github) or 3
+        # (no inputs) -- a red that is no finding. Its inputs are workflows, actions and
+        # dependabot.yml; with none of them, there is nothing for this step to say.
+        if [ -z "$(find .github -type f \( -path '.github/workflows/*.yml' -o -path '.github/workflows/*.yaml' -o -name 'action.yml' -o -name 'action.yaml' -o -name 'dependabot.yml' -o -name 'dependabot.yaml' \) 2>/dev/null | head -1)" ]; then
+          echo "::notice title=zizmor::no workflow, action or dependabot file under .github -- nothing to audit"
+          exit 0
+        fi
         rc=0
         zizmor --offline --strict-collection --config "$ZIZMOR_CONFIG" --format sarif --min-severity "$MIN_SEVERITY" .github/ \
           > "$RUNNER_TEMP/zizmor.sarif" || rc=$?
@@ -112,6 +121,9 @@ runs:
         MIN_SEVERITY: ${{ inputs.min_severity }}
       shell: bash
       run: |
+        if [ -z "$(find .github -type f \( -path '.github/workflows/*.yml' -o -path '.github/workflows/*.yaml' -o -name 'action.yml' -o -name 'action.yaml' -o -name 'dependabot.yml' -o -name 'dependabot.yaml' \) 2>/dev/null | head -1)" ]; then
+          echo "zizmor: nothing to audit under .github" >> "$GITHUB_STEP_SUMMARY"; exit 0
+        fi
         {
           echo '## zizmor — mevcut borç (bilgi)'
           echo '```'
