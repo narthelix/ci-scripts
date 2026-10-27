@@ -81,8 +81,13 @@ runs:
         # with findings too (measured), so any non-zero exit is zizmor itself
         # breaking. Piped straight into reviewdog that read as "parse error: EOF"
         # -- a red that explains nothing. It is caught and named here instead.
+        #
+        # ⚠ `--strict-collection`, MEASURED 2026-10-27 (narthelix/.github#139): a
+        # workflow that is not valid YAML was only a WARN, zizmor exited 0 and the
+        # gate went green on a file GitHub refused to run ("workflow file issue").
+        # Strict, it is exit 1 -- the error below. All 33 repos collected clean.
         rc=0
-        zizmor --offline --config "$ZIZMOR_CONFIG" --format sarif --min-severity "$MIN_SEVERITY" .github/ \
+        zizmor --offline --strict-collection --config "$ZIZMOR_CONFIG" --format sarif --min-severity "$MIN_SEVERITY" .github/ \
           > "$RUNNER_TEMP/zizmor.sarif" || rc=$?
         if [ "$rc" -ne 0 ]; then
           echo "::error title=zizmor calismadi::zizmor exit $rc -- arac hatasi, bulgu degil (log'a bak)"
