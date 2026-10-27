@@ -14,6 +14,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  merge_group:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -90,3 +91,21 @@ jobs:
       risk_floor: ask
       require_issue_link: false
       runner: ubuntu-latest  # public repo -- rationale at the top of this file
+
+  # The one required check, `ci` (ADR-0143, narthelix/ops#2170 U12): the merge queue
+  # tests the PR on top of the latest main, so no branch update is needed. Skipped
+  # counts as passed; anything else fails.
+  ci:
+    if: always()
+    needs: [test, pr-conventions, secret-scan, actions-lint, gates]
+    runs-on: [self-hosted, linux, ARM64, israel]
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          set -euo pipefail
+          for r in $RESULTS; do
+            case "$r" in success|skipped) ;; *) echo "::error::a required job: $r"; exit 1 ;; esac
+          done
