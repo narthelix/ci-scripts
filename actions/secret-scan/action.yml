@@ -27,8 +27,8 @@ runs:
       env:
         SKIP_PREFIXES: ${{ inputs.skip_paths }}
         EVENT_NAME: ${{ github.event_name }}
-        BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
       run: '"$GITHUB_ACTION_PATH/../scope.sh"'
 
     # The gitleaks CLI, not gitleaks/gitleaks-action: the action hard-fails on
@@ -87,12 +87,16 @@ runs:
       shell: bash
       env:
         EVENT_NAME: ${{ github.event_name }}
-        BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
         CONFIG_PATH: ${{ inputs.config_path }}
       run: |
         set -euo pipefail
-        if [ "$EVENT_NAME" = "pull_request" ] && git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+        # A merge group is scanned like a PR: its own commit on top of main. Without
+        # this it fell into the full-history branch below, and a repository whose past
+        # holds one finding (handbook, 2026-10-27) could never leave the queue.
+        if { [ "$EVENT_NAME" = "pull_request" ] || [ "$EVENT_NAME" = "merge_group" ]; } \
+            && git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
           range="--log-opts=${BASE_SHA}..${HEAD_SHA}"
         else
           range=""

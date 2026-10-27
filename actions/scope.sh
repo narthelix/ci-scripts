@@ -10,7 +10,7 @@
 #
 # Env: SKIP_PREFIXES, EVENT_NAME, BASE_SHA, HEAD_SHA.
 set -euo pipefail
-if [ -z "${SKIP_PREFIXES// }" ] || [ "$EVENT_NAME" != "pull_request" ]; then
+if [ -z "${SKIP_PREFIXES// }" ] || { [ "$EVENT_NAME" != "pull_request" ] && [ "$EVENT_NAME" != "merge_group" ]; }; then
   echo "in_scope=true" >> "$GITHUB_OUTPUT"; exit 0
 fi
 if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
