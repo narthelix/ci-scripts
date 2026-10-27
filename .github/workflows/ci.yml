@@ -98,7 +98,7 @@ jobs:
   ci:
     if: always()
     needs: [test, pr-conventions, secret-scan, actions-lint, gates]
-    runs-on: [self-hosted, linux, ARM64, israel]
+    runs-on: ubuntu-latest  # public repo -- rationale at the top of this file
     timeout-minutes: 5
     permissions: {}
     steps:
