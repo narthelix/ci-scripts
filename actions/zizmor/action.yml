@@ -15,6 +15,12 @@ inputs:
   min_severity:
     required: false
     default: 'medium'
+  mirror:
+    description: >-
+      Base URL of the caller's copy of reviewdog (`<mirror>/reviewdog/<version>/<asset>`), tried
+      before GitHub's release download (narthelix/ops#2295). Empty: GitHub only.
+    required: false
+    default: ''
 
 runs:
   using: composite
@@ -58,11 +64,30 @@ runs:
           echo "ZIZMOR_CONFIG=$RUNNER_TEMP/zizmor.yml" >> "$GITHUB_ENV"
         fi
 
+    # Our own install, not reviewdog/action-setup (narthelix/ops#2295): that action downloads from
+    # GitHub's release host with no fallback, and on 2026-11-08 the host 50x'd to every runner for
+    # over an hour. The caller's mirror first, then GitHub; the sha256 pinned here decides either way.
     - name: reviewdog kurulum (PR)
       if: github.event_name == 'pull_request'
-      uses: reviewdog/action-setup@d8a7baabd7f3e8544ee4dbde3ee41d0011c3a93f # v1.5.0
-      with:
-        reviewdog_version: v0.21.0
+      shell: bash
+      env:
+        MIRROR: ${{ inputs.mirror }}
+      run: |
+        set -euo pipefail
+        v=0.21.0
+        case "$(uname -m)" in
+          x86_64|amd64)  a=Linux_x86_64; sha=ad5ce7d5ffa52aaa7ec8710a8fa764181b6cecaab843cc791e1cce1680381569 ;;
+          aarch64|arm64) a=Linux_arm64;  sha=b6aff657b39e9267a258e8fa66d616f7221aec5975d0251dac76043bad0fa177 ;;
+          *) echo "::error::desteklenmeyen mimari $(uname -m)"; exit 1 ;;
+        esac
+        f="reviewdog_${v}_${a}.tar.gz"; cd "$RUNNER_TEMP"
+        o=(-fsSL --proto '=https' --proto-redir '=https' --connect-timeout 20 --retry-all-errors)
+        if [ -z "$MIRROR" ] || ! curl "${o[@]}" --retry 3 --retry-delay 2 -o "$f" "${MIRROR%/}/reviewdog/${v}/${f}"; then
+          curl "${o[@]}" --retry 5 --retry-delay 3 -o "$f" "https://github.com/reviewdog/reviewdog/releases/download/v${v}/${f}"
+        fi
+        echo "${sha}  ${f}" | sha256sum -c -
+        mkdir -p "$RUNNER_TEMP/reviewdog" && tar -xzf "$f" -C "$RUNNER_TEMP/reviewdog" reviewdog
+        echo "$RUNNER_TEMP/reviewdog" >> "$GITHUB_PATH"
 
     - name: zizmor (PR — yalnız eklenen satırlar)
       if: github.event_name == 'pull_request'

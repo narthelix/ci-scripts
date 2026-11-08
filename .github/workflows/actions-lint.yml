@@ -82,6 +82,7 @@ jobs:
         with:
           zizmor_version: ${{ inputs.zizmor_version }}
           min_severity: ${{ inputs.min_severity }}
+          mirror: ${{ inputs.tools_mirror }}
 
   # shellcheck, hadolint, install-scripts (semgrep) -- the rest of what
   # SonarCloud flagged in repo plumbing (narthelix/muznara#1852). Same
