@@ -55,6 +55,13 @@ on:
         required: false
         type: string
         default: '.gitleaks.toml'
+      tools_mirror:
+        description: >-
+          Base URL of the caller's copy of gitleaks, shellcheck and hadolint, tried before GitHub's
+          release download (narthelix/ops#2295). Empty (the default): GitHub only.
+        required: false
+        type: string
+        default: ''
       risk_ask_paths:
         description: Space-separated extra regexes that make a PR Ask (handbook ADR-0128).
         required: false
@@ -122,6 +129,7 @@ jobs:
         with:
           config_path: ${{ inputs.config_path }}
           skip_paths: ${{ inputs.skip_paths }}
+          mirror: ${{ inputs.tools_mirror }}
 
       - name: zizmor
         uses: ./.narthelix-ci-scripts/actions/zizmor
@@ -129,6 +137,8 @@ jobs:
       - name: repo-lint
         if: github.event_name == 'pull_request'
         uses: ./.narthelix-ci-scripts/actions/repo-lint
+        with:
+          mirror: ${{ inputs.tools_mirror }}
 
       # `!cancelled()`, not the default `success()`: the label is set on a red
       # PR too. The merge is not -- the client ID is passed only while the job
