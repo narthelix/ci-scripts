@@ -133,6 +133,8 @@ jobs:
 
       - name: zizmor
         uses: ./.narthelix-ci-scripts/actions/zizmor
+        with:
+          mirror: ${{ inputs.tools_mirror }}
 
       - name: repo-lint
         if: github.event_name == 'pull_request'
