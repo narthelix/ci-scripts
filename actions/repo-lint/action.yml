@@ -38,8 +38,8 @@ runs:
             hl=hadolint-linux-x86_64; hl_sha=6bf226944684f56c84dd014e8b979d27425c0148f61b3bd99bcc6f39e9dc5a47 ;;
           *) echo "::error::desteklenmeyen mimari $(uname -m)"; exit 1 ;;
         esac
-        curl -fsSL -o "$sc" "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/$sc"
-        curl -fsSL -o "$hl" "https://github.com/hadolint/hadolint/releases/download/v2.14.0/$hl"
+        curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors --connect-timeout 20 -o "$sc" "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/$sc"
+        curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors --connect-timeout 20 -o "$hl" "https://github.com/hadolint/hadolint/releases/download/v2.14.0/$hl"
         echo "$sc_sha  $sc" | sha256sum -c -
         echo "$hl_sha  $hl" | sha256sum -c -
         tar -xzf "$sc" && mv shellcheck-v0.11.0/shellcheck "$bin/"
