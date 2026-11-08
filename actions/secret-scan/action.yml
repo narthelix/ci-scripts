@@ -17,6 +17,13 @@ inputs:
     description: Space-separated path prefixes; a PR touching ONLY these is skipped.
     required: false
     default: ''
+  mirror:
+    description: >-
+      Base URL of the caller's copy of the tools (`<mirror>/gitleaks/<version>/<asset>`), tried
+      before GitHub's release download (narthelix/ops#2295). The caller owns the value: this repo
+      is public and names no host. Empty: GitHub only.
+    required: false
+    default: ''
 
 runs:
   using: composite
@@ -41,6 +48,7 @@ runs:
       shell: bash
       env:
         GITLEAKS_VERSION: ${{ inputs.gitleaks_version }}
+        MIRROR: ${{ inputs.mirror }}
       run: |
         set -euo pipefail
         os=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -53,23 +61,40 @@ runs:
         base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
         # `-L` follows redirects, so the scheme has to be pinned on the
         # redirect too: without --proto-redir a downgrade to http would be
-        # followed silently. It matters most for the checksums file — that is
-        # the thing the tamper check trusts.
-        curl_opts=(-fsSL --proto '=https' --proto-redir '=https')
-        curl "${curl_opts[@]}" "${base}/${asset}" -o "${RUNNER_TEMP}/${asset}"
-        curl "${curl_opts[@]}" "${base}/gitleaks_${GITLEAKS_VERSION}_checksums.txt" -o "${RUNNER_TEMP}/checksums.txt"
+        # followed silently. Retries ride out a passing 504 (2026-11-08).
+        curl_opts=(-fsSL --proto '=https' --proto-redir '=https' --retry 5 --retry-delay 3 --retry-all-errors --connect-timeout 20)
+        # The file is trusted by THIS commit, not by where it came from (narthelix/ops#2295): with a
+        # mirror, a checksums file fetched beside the binary would vouch for itself. A version with
+        # no pin here falls back to the release's own checksums, from GitHub only.
+        case "${GITLEAKS_VERSION}_${os}_${arch}" in
+          8.30.1_linux_x64)   expected=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb ;;
+          8.30.1_linux_arm64) expected=e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080 ;;
+          *) expected="" ;;
+        esac
+        got=""
+        if [ -n "$expected" ] && [ -n "$MIRROR" ] \
+           && curl "${curl_opts[@]}" "${MIRROR%/}/gitleaks/${GITLEAKS_VERSION}/${asset}" -o "${RUNNER_TEMP}/${asset}"; then
+          got=mirror
+        else
+          curl "${curl_opts[@]}" "${base}/${asset}" -o "${RUNNER_TEMP}/${asset}"
+          got=github
+        fi
+        if [ -z "$expected" ]; then
+          curl "${curl_opts[@]}" "${base}/gitleaks_${GITLEAKS_VERSION}_checksums.txt" -o "${RUNNER_TEMP}/checksums.txt"
+          expected=$(awk -v a="${asset}" '$2==a {print $1}' "${RUNNER_TEMP}/checksums.txt")
+        fi
         # Verify before trusting: a scanner that got corrupted or tampered and
         # exits 0 would silently pass this security gate.
-        expected=$(awk -v a="${asset}" '$2==a {print $1}' "${RUNNER_TEMP}/checksums.txt")
         if command -v sha256sum >/dev/null 2>&1; then
           actual=$(sha256sum "${RUNNER_TEMP}/${asset}" | awk '{print $1}')
         else
           actual=$(shasum -a 256 "${RUNNER_TEMP}/${asset}" | awk '{print $1}')
         fi
         if [ -z "$expected" ] || [ "$expected" != "$actual" ]; then
-          echo "::error::gitleaks checksum verification failed (expected=$expected actual=$actual)"
+          echo "::error::gitleaks checksum verification failed (expected=$expected actual=$actual, from $got)"
           exit 1
         fi
+        echo "gitleaks ${GITLEAKS_VERSION} from ${got}, sha256 verified"
         tar -xzf "${RUNNER_TEMP}/${asset}" -C "${RUNNER_TEMP}" gitleaks
         chmod +x "${RUNNER_TEMP}/gitleaks"
         "${RUNNER_TEMP}/gitleaks" version
