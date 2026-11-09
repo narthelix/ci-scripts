@@ -63,9 +63,30 @@ runs:
         ln -s "$RUNNER_TEMP/sg/bin/semgrep" "$bin/semgrep"
         echo "$bin" >> "$GITHUB_PATH"
 
-    - uses: reviewdog/action-setup@d8a7baabd7f3e8544ee4dbde3ee41d0011c3a93f # v1.5.0
-      with:
-        reviewdog_version: v0.21.0
+    # Our own install, as in actions/zizmor (narthelix/ops#2295): reviewdog/action-setup downloads
+    # from GitHub's release host with no fallback. Missed here in #2295; on 2026-11-09 the host
+    # answered 504 for reviewdog's checksums.txt on every try and every PR's gate went red.
+    # The caller's mirror first, then GitHub; the sha256 pinned here decides either way.
+    - name: reviewdog kurulum
+      shell: bash
+      env:
+        MIRROR: ${{ inputs.mirror }}
+      run: |
+        set -euo pipefail
+        v=0.21.0
+        case "$(uname -m)" in
+          x86_64|amd64)  a=Linux_x86_64; sha=ad5ce7d5ffa52aaa7ec8710a8fa764181b6cecaab843cc791e1cce1680381569 ;;
+          aarch64|arm64) a=Linux_arm64;  sha=b6aff657b39e9267a258e8fa66d616f7221aec5975d0251dac76043bad0fa177 ;;
+          *) echo "::error::desteklenmeyen mimari $(uname -m)"; exit 1 ;;
+        esac
+        f="reviewdog_${v}_${a}.tar.gz"; cd "$RUNNER_TEMP"
+        o=(-fsSL --proto '=https' --proto-redir '=https' --connect-timeout 20 --retry-all-errors)
+        if [ -z "$MIRROR" ] || ! curl "${o[@]}" --retry 3 --retry-delay 2 -o "$f" "${MIRROR%/}/reviewdog/${v}/${f}"; then
+          curl "${o[@]}" --retry 5 --retry-delay 3 -o "$f" "https://github.com/reviewdog/reviewdog/releases/download/v${v}/${f}"
+        fi
+        echo "${sha}  ${f}" | sha256sum -c -
+        mkdir -p "$RUNNER_TEMP/reviewdog-bin" && tar -xzf "$f" -C "$RUNNER_TEMP/reviewdog-bin" reviewdog
+        echo "$RUNNER_TEMP/reviewdog-bin" >> "$GITHUB_PATH"
 
     # Every tool writes a report file first and is checked for its OWN
     # failure before reviewdog sees it -- a tool that crashed must not read
