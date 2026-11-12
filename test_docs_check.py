@@ -185,7 +185,12 @@ def main() -> int:
     uncovered = [
         d
         for d in sorted(docs_check.SKIP_DIRS)
-        if not (excluded(f"{d}/a.md") and excluded(f"nested/deep/{d}/a.md"))
+        # Both separators: lychee hands Windows paths over with backslashes, and a
+        # `/`-only rule let 2791 node_modules READMEs into the gate (ops#2268).
+        if not all(
+            excluded(p)
+            for p in (f"{d}/a.md", f"nested/deep/{d}/a.md", f"{d}\\a.md", f"nested\\deep\\{d}\\a.md")
+        )
     ]
     if uncovered:
         failures += 1
@@ -209,6 +214,7 @@ def main() -> int:
         "docs/research/issue_tracking_github_vs_jira_research.md",
         ".github/pull_request_template.md",
     ]
+    must_be_checked += [p.replace("/", "\\") for p in must_be_checked]
     swallowed = [path for path in must_be_checked if excluded(path)]
     if swallowed:
         failures += 1
