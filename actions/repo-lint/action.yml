@@ -173,13 +173,31 @@ runs:
         reviewdog -f=sarif -name=install-scripts -reporter=github-pr-review \
           -filter-mode=added -fail-level=error < "$RUNNER_TEMP/is.sarif"
 
+    # Whole-repo, not added-lines: the file either exists or it does not
+    # (narthelix/ops#2308). handbook local_development.md Layer 5 makes
+    # .gitattributes the line-ending enforcement, yet 21 of 31 repos lacked it
+    # (measured 2026-11-12) -- a rule nobody checked. The line is what matters;
+    # a repo may add its own lines to ci-scripts templates/gitattributes.
+    - name: gitattributes
+      id: ga
+      continue-on-error: true
+      shell: bash
+      run: |
+        if [ -f .gitattributes ] && grep -qE '^\*[[:space:]]+text=auto[[:space:]]+eol=lf([[:space:]]|$)' .gitattributes; then
+          echo ".gitattributes: '* text=auto eol=lf' var"
+        else
+          echo "::error title=.gitattributes eksik::'* text=auto eol=lf' satiri yok. Kopya: ci-scripts templates/gitattributes (narthelix/ops#2308)"
+          exit 1
+        fi
+
     - name: sonuc
       if: always()
       env:
         SC: ${{ steps.sc.outcome }}
         HL: ${{ steps.hl.outcome }}
         IS: ${{ steps.is.outcome }}
+        GA: ${{ steps.ga.outcome }}
       shell: bash
       run: |
-        echo "shellcheck=$SC hadolint=$HL install-scripts=$IS"
-        [ "$SC" = success ] && [ "$HL" = success ] && [ "$IS" = success ]
+        echo "shellcheck=$SC hadolint=$HL install-scripts=$IS gitattributes=$GA"
+        [ "$SC" = success ] && [ "$HL" = success ] && [ "$IS" = success ] && [ "$GA" = success ]
