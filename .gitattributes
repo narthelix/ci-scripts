@@ -1,0 +1,55 @@
+# Working-tree contract for a repo developed on Windows, built on macOS, and
+# run on Linux -- handbook engineering/local_development.md, Layer 5.
+#
+# ONE COPY: this file (ci-scripts templates/gitattributes) is the source; each
+# repo carries a copy and may ADD lines below it. The org gate (repo-lint)
+# checks for the `* text=auto eol=lf` line, not for byte equality
+# (narthelix/ops#2308).
+#
+# Without this file a Windows checkout (core.autocrlf=true) writes CRLF into
+# deploy/*.sh, and a script committed that way dies on the cluster with
+# `bad interpreter: /usr/bin/env bash^M` -- a failure that is invisible on the
+# machine that caused it. The enforcement is this file, deliberately, not a
+# per-developer core.autocrlf setting nobody can verify.
+
+* text=auto eol=lf
+
+# Executed by a Linux shell or parsed by Linux tooling -- never CRLF, even if
+# content sniffing were to guess otherwise.
+*.sh         text eol=lf
+*.bash       text eol=lf
+*.yml        text eol=lf
+*.yaml       text eol=lf
+Dockerfile   text eol=lf
+*.Dockerfile text eol=lf
+
+# Windows-native scripts keep CRLF, for the day one lands here.
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Never normalised, never diffed as text.
+*.png      binary
+*.jpg      binary
+*.jpeg     binary
+*.gif      binary
+*.webp     binary
+*.ico      binary
+*.pdf      binary
+*.woff     binary
+*.woff2    binary
+*.ttf      binary
+*.otf      binary
+*.zip      binary
+*.jks      binary
+*.keystore binary
+*.p12      binary
+*.jar      binary
+*.apk      binary
+*.aab      binary
+*.mp3      binary
+*.ogg      binary
+*.wav      binary
+*.mp4      binary
+*.mov      binary
+*.webm     binary
