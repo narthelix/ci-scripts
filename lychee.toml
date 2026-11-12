@@ -62,23 +62,27 @@ no_ignore = true
 # The count dropped 252 -> 242 and nothing failed. Anchored `(^|/)name/` is the
 # form lychee's own example config uses; the trailing slash is what makes this a
 # directory rule instead of a substring one.
+#
+# ⚠ BOTH SEPARATORS, `[/\\]`: on Windows lychee matches these against paths with
+# backslashes. The `/`-only form excluded nothing there -- 2791 node_modules
+# READMEs went into a pre-push run and blocked it (narthelix/ops#2268, measured).
 exclude_path = [
-  '(^|/)\.ci-scripts/',
-  '(^|/)\.dart_tool/',
-  '(^|/)\.git/',
-  '(^|/)\.gradle/',
-  '(^|/)\.next/',
-  '(^|/)\.plugin_symlinks/',
-  '(^|/)\.symlinks/',
-  '(^|/)ephemeral/',
-  '(^|/)\.terraform/',
-  '(^|/)\.venv/',
-  '(^|/)Pods/',
-  '(^|/)__pycache__/',
-  '(^|/)build/',
-  '(^|/)coverage/',
-  '(^|/)dist/',
-  '(^|/)node_modules/',
-  '(^|/)vendor/',
-  '(^|/)venv/',
+  '(^|[/\\])\.ci-scripts[/\\]',
+  '(^|[/\\])\.dart_tool[/\\]',
+  '(^|[/\\])\.git[/\\]',
+  '(^|[/\\])\.gradle[/\\]',
+  '(^|[/\\])\.next[/\\]',
+  '(^|[/\\])\.plugin_symlinks[/\\]',
+  '(^|[/\\])\.symlinks[/\\]',
+  '(^|[/\\])ephemeral[/\\]',
+  '(^|[/\\])\.terraform[/\\]',
+  '(^|[/\\])\.venv[/\\]',
+  '(^|[/\\])Pods[/\\]',
+  '(^|[/\\])__pycache__[/\\]',
+  '(^|[/\\])build[/\\]',
+  '(^|[/\\])coverage[/\\]',
+  '(^|[/\\])dist[/\\]',
+  '(^|[/\\])node_modules[/\\]',
+  '(^|[/\\])vendor[/\\]',
+  '(^|[/\\])venv[/\\]',
 ]
