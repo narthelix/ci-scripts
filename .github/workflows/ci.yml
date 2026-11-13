@@ -39,6 +39,7 @@ jobs:
       - run: python3 test_risk_class.py
       - run: python3 test_forgejo_pr_files.py
       - run: python3 test_forgejo_review.py
+      - run: python3 test_forgejo_risk.py
       - run: python3 test_tf_plan_risk.py
       - run: python3 test_test_results.py
       - run: python3 test_quarantine.py
