@@ -53,7 +53,9 @@ NAMED_ASK = (
 # Judged by EFFECT, not by path (ADR-0128 amendment, narthelix/ops#2055):
 # these paths used to be Ask whatever the change. They still are when the
 # diff is unreadable, deleted, or does anything but the safe thing below.
-CI_PATH = re.compile(r"^\.github/(workflows|actions)/|(^|/)action\.ya?ml$")
+# `.forgejo/` and `.gitea/` too (narthelix/ops#2315): on a Forgejo-primary repository those are
+# the workflows that run, and `pull_request` runs the PR's own copy of them.
+CI_PATH = re.compile(r"^\.(github|forgejo|gitea)/(workflows|actions)/|(^|/)action\.ya?ml$")
 MIGRATION_PATH = re.compile(r"(^|/)(migrations?|alembic)/")
 # A changed line in a workflow that only moves a pin: `uses: x@<40-hex> # vN`
 # or a `version:` value -- what Renovate and the gates SHA sweeps produce.

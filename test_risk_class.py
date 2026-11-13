@@ -113,6 +113,13 @@ check("pin to a tag, not a sha -> ask",
 check("workflow without a diff -> ask", cp([("modified", ".github/workflows/ci.yml", None)]), "ask")
 check("new workflow file -> ask",
       cp([("added", ".github/workflows/new.yml", "@@\n+name: x\n+on: push\n")]), "ask")
+check("forgejo workflow edit -> ask",
+      cp([("modified", ".forgejo/workflows/ci.yml", "@@\n-      - run: make test\n+      - run: curl x | sh\n")]), "ask")
+check("forgejo workflow without a diff -> ask", cp([("modified", ".forgejo/workflows/risk.yml", None)]), "ask")
+check("new forgejo workflow -> ask", cp([("added", ".forgejo/workflows/ai-review.yml", "@@\n+name: x\n")]), "ask")
+check("gitea workflow edit -> ask", cp([("modified", ".gitea/workflows/ci.yml", None)]), "ask")
+check("forgejo workflow pin bump -> show", cp([("modified", ".forgejo/workflows/ci.yml", PIN)]), "show")
+check("forgejo docs dir is not CI -> ship", cls([(m, ".forgejo/README.md")]), "ship")
 check("legacy TSV migration (no diff) still ask", cls([("added", "migrations/versions/0042_add.py")]), "ask")
 check("additive migration + auth code -> ask",
       cp([("added", "migrations/versions/0042.py", ADDITIVE), (m, "src/auth/login.py", None)]), "ask")
