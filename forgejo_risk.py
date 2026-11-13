@@ -6,16 +6,24 @@ themselves once the required checks pass; Ask is left to a human.
 
 Stdlib only. The forge's address is an argument: this repository is public and holds no host.
 
-    forgejo_risk.py --url URL --repo OWNER/NAME --pr N [--floor ship|show|ask] [--ask-paths "re re"]
+    forgejo_risk.py --url URL --repo OWNER/NAME --pr N [--action A] [--floor ship|show|ask] [--ask-paths "re re"]
     token: FORGEJO_MERGER_TOKEN (a non-admin bot with write on the repo; labels + merge)
 
 Order, and why:
   1. Read the PR's LIVE labels (an escalation label, `risk:escalated`, wins).
   2. Classify its diff (pulls/N.diff -> forgejo_pr_files.split -> risk_class.classify).
   3. Set exactly one risk:<class> label.
-  4. Ship/Show and not a draft: schedule "merge when checks succeed" (squash). Then read the
-     labels AGAIN -- an escalation that landed in between cancels the scheduled merge. If that
-     cancel fails, exit 1: a red check is then the only thing between that PR and a merge.
+  4. Ship/Show, not a draft, and the event is one that SCHEDULES (opened, reopened,
+     synchronize, edited, ready_for_review -- `--action`): schedule "merge when checks succeed"
+     (squash). Then read the labels AGAIN -- an escalation that landed in between cancels the
+     scheduled merge. If that cancel fails, exit 1: a red check is then the only thing between
+     that PR and a merge.
+     A label event only re-labels. That is GitHub's auto-merge, enabled once: a merge queue
+     (gitea-mq) that bounces a PR cancels its merge and changes its labels, and re-scheduling on
+     that label event re-queued the same red PR every 30 s (measured 2026-11-13, mq-pilot#7,
+     narthelix/ops#2317). The author's next push schedules it again.
+  5. Ask (or escalated) on any event: cancel a merge that is already scheduled -- an escalation
+     label added by hand must stop it as the AI review's does.
 Anything else that fails is a warning and exit 0: a labelling hiccup must not turn every PR red,
 and without a label nothing is merged.
 """
@@ -33,6 +41,8 @@ import forgejo_pr_files
 import risk_class
 
 COLORS = {"ship": "#0e8a16", "show": "#fbca04", "ask": "#d93f0b"}
+# Events that (re)schedule a Ship/Show merge. Empty = a caller that predates --action: as before.
+SCHEDULE_ACTIONS = {"", "opened", "reopened", "synchronize", "edited", "ready_for_review"}
 
 
 class Api:
@@ -67,6 +77,23 @@ def ensure_label_ids(api: Api) -> dict[str, int]:
     return have
 
 
+def cancel_scheduled(api: Api, pr: int, why: str) -> int:
+    """Cancel a scheduled merge, if any. 404 = none was scheduled. Exit 1 when it cannot."""
+    try:
+        api.call("DELETE", f"/pulls/{pr}/merge")
+    except urllib.error.HTTPError as e:
+        if e.code == 404:  # noqa: PLR2004
+            print(f"merge: not scheduled ({why}) -- a human merges")
+            return 0
+        print(f"::error::{why} but the scheduled merge could not be cancelled: {e}")
+        return 1
+    except urllib.error.URLError as e:
+        print(f"::error::{why} but the scheduled merge could not be cancelled: {e}")
+        return 1
+    print(f"merge: scheduled merge cancelled ({why}) -- a human merges")
+    return 0
+
+
 def run(a: argparse.Namespace, api: Api) -> int:
     pr = api.call("GET", f"/pulls/{a.pr}")
     live = api.labels(a.pr)
@@ -83,8 +110,13 @@ def run(a: argparse.Namespace, api: Api) -> int:
     if f"risk:{cls}" not in live:
         api.call("POST", f"/issues/{a.pr}/labels", {"labels": [ids[f"risk:{cls}"]]})
 
-    if cls == "ask" or pr.get("draft"):
-        print("merge: not scheduled (Ask or draft) -- a human merges")
+    if cls == "ask":
+        return cancel_scheduled(api, a.pr, "Ask")
+    if pr.get("draft"):
+        print("merge: not scheduled (draft)")
+        return 0
+    if a.action not in SCHEDULE_ACTIONS:
+        print(f"merge: not (re)scheduled on '{a.action}' -- only a push or (re)open schedules it")
         return 0
     api.call(
         "POST",
@@ -95,12 +127,7 @@ def run(a: argparse.Namespace, api: Api) -> int:
     # An escalation may have landed while the merge was being scheduled.
     after = api.labels(a.pr)
     if risk_class.ESCALATION_LABEL in after or "risk:ask" in after:
-        try:
-            api.call("DELETE", f"/pulls/{a.pr}/merge")
-        except urllib.error.URLError as e:
-            print(f"::error::escalated to Ask but the scheduled merge could not be cancelled: {e}")
-            return 1
-        print("merge: cancelled -- escalated to Ask meanwhile")
+        return cancel_scheduled(api, a.pr, "escalated to Ask meanwhile")
     return 0
 
 
@@ -109,6 +136,7 @@ def main() -> int:
     ap.add_argument("--url", required=True)
     ap.add_argument("--repo", required=True)
     ap.add_argument("--pr", type=int, required=True)
+    ap.add_argument("--action", default="", help="the pull_request event's action")
     ap.add_argument("--floor", default="ship", choices=list(risk_class.ORDER))
     ap.add_argument("--ask-paths", default="")
     a = ap.parse_args()
