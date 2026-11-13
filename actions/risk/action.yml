@@ -93,6 +93,19 @@ runs:
           gh pr edit "$NUM" -R "$REPO" --remove-label "risk:$c" >/dev/null 2>&1 || true
         done
         gh pr edit "$NUM" -R "$REPO" --add-label "risk:$cls" >/dev/null || echo "::warning::could not set label risk:$cls"
+        # And once more AFTER writing: plan-risk can add `risk:escalated` + `risk:ask` between the
+        # re-read above and the loop, and the loop then removed `risk:ask` as "another class"
+        # (infra-terraform#215, 2026-11-13: escalated -> ask -> unlabeled ask -> show; the apply
+        # gate refused the Show merge of an Ask plan). The escalation wins, whenever it landed.
+        if [ "$cls" != ask ]; then
+          case ",$(live 2>/dev/null)," in *,risk:escalated,*)
+            gh pr edit "$NUM" -R "$REPO" --add-label risk:ask --remove-label "risk:$cls" >/dev/null \
+              || echo "::warning::escalated meanwhile, but risk:ask could not be restored"
+            echo "class=ask" >> "$GITHUB_OUTPUT"
+            echo "- escalated while the label was being written: Ask" >> "$GITHUB_STEP_SUMMARY"
+            ;;
+          esac
+        fi
 
     # ADR-0128 S2: Ship and Show merge themselves once every required check is
     # green. Ask is left alone -- only the founder enables a merge there. Bot
