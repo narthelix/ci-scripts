@@ -178,6 +178,8 @@ Credentials file from the job's OIDC token and exports `GOOGLE_APPLICATION_CREDE
 client libraries do the STS exchange and the impersonation themselves. The job needs
 `enable-openid-connect: true`, and the pool must admit its repository. The OIDC token is not
 refreshed (its lifetime is printed): a job longer than that calls the action again.
+With `access_token_scopes` (space separated) it also outputs a 30-minute `access_token` as the
+service account, for a caller that calls a Google API directly rather than through a client library.
 
 ```yaml
     enable-openid-connect: true

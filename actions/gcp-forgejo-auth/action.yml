@@ -22,11 +22,21 @@ inputs:
   service_account:
     description: Email of the service account to impersonate.
     required: true
+  access_token_scopes:
+    description: >-
+      Optional, space separated OAuth scopes. When set, the action also exchanges the token now and
+      outputs a short-lived (30 min) access token for those scopes -- for a caller that calls a
+      Google API directly instead of through a client library (which reads the ADC file).
+    required: false
+    default: ''
 
 outputs:
   credentials_file:
     description: Path of the written ADC file (also exported as GOOGLE_APPLICATION_CREDENTIALS).
     value: ${{ steps.adc.outputs.credentials_file }}
+  access_token:
+    description: Only with access_token_scopes -- a 30-minute access token as the service account (masked).
+    value: ${{ steps.token.outputs.access_token }}
 
 runs:
   using: composite
@@ -79,3 +89,37 @@ runs:
           echo "CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE=$dir/adc.json"
         } >> "$GITHUB_ENV"
         echo "credentials_file=$dir/adc.json" >> "$GITHUB_OUTPUT"
+
+    - name: Access token (only with access_token_scopes)
+      id: token
+      if: inputs.access_token_scopes != ''
+      shell: bash
+      env:
+        PROVIDER: ${{ inputs.workload_identity_provider }}
+        SERVICE_ACCOUNT: ${{ inputs.service_account }}
+        SCOPES: ${{ inputs.access_token_scopes }}
+      run: |
+        set -euo pipefail
+        dir="${RUNNER_TEMP}/gcp-forgejo-auth"
+        python3 - "$dir/oidc.jwt" "//iam.googleapis.com/${PROVIDER}" "$SERVICE_ACCOUNT" "$SCOPES" <<'PY' > "$dir/token"
+        import json, sys, urllib.request
+        jwt_path, aud, sa, scopes = sys.argv[1:5]
+        def post(url, body, headers):
+            req = urllib.request.Request(url, data=json.dumps(body).encode(),
+                                         headers={"Content-Type": "application/json", **headers})
+            with urllib.request.urlopen(req, timeout=60) as r:
+                return json.load(r)
+        sts = post("https://sts.googleapis.com/v1/token", {
+            "grantType": "urn:ietf:params:oauth:grant-type:token-exchange", "audience": aud,
+            "scope": "https://www.googleapis.com/auth/cloud-platform",
+            "requestedTokenType": "urn:ietf:params:oauth:token-type:access_token",
+            "subjectTokenType": "urn:ietf:params:oauth:token-type:jwt",
+            "subjectToken": open(jwt_path).read().strip()}, {})["access_token"]
+        tok = post(f"https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/{sa}:generateAccessToken",
+                   {"scope": scopes.split(), "lifetime": "1800s"}, {"Authorization": "Bearer " + sts})
+        sys.stdout.write(tok["accessToken"])
+        PY
+        echo "::add-mask::$(cat "$dir/token")"
+        echo "access_token=$(cat "$dir/token")" >> "$GITHUB_OUTPUT"
+        rm -f "$dir/token"
+
