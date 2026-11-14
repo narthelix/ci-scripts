@@ -172,6 +172,22 @@ non-blocking run one that runs only them. Pass the pattern through `env:`, never
         run: npx jest ${EXCLUDE:+--testNamePattern "$EXCLUDE"}
 ```
 
+`actions/gcp-forgejo-auth` is keyless Google Cloud access for a **Forgejo** Actions job -- what
+google-github-actions/auth does on GitHub. It writes an `external_account` Application Default
+Credentials file from the job's OIDC token and exports `GOOGLE_APPLICATION_CREDENTIALS`; the Google
+client libraries do the STS exchange and the impersonation themselves. The job needs
+`enable-openid-connect: true`, and the pool must admit its repository. The OIDC token is not
+refreshed (its lifetime is printed): a job longer than that calls the action again.
+
+```yaml
+    enable-openid-connect: true
+    steps:
+      - uses: https://<forgejo>/<org>/ci-scripts/actions/gcp-forgejo-auth@<sha>  # vX.Y.Z
+        with:
+          workload_identity_provider: projects/<number>/locations/global/workloadIdentityPools/<pool>/providers/<provider>
+          service_account: <name>@<project>.iam.gserviceaccount.com
+```
+
 ## Tools
 
 ### `docs_check.py`

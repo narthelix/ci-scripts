@@ -1,0 +1,81 @@
+# Keyless Google Cloud credentials for a Forgejo Actions job (ADR-0153 G3, narthelix/ops#2319): what
+# google-github-actions/auth does on GitHub, for Forgejo's OIDC issuer.
+#
+# It writes an `external_account` Application Default Credentials file and points
+# GOOGLE_APPLICATION_CREDENTIALS at it. The Google client libraries (Python google-auth, Node
+# google-auth-library, gcloud) then exchange the job's OIDC token at STS and impersonate the service
+# account themselves, refreshing the short-lived Google token as they go. No key is stored anywhere.
+#
+# The caller's job needs `enable-openid-connect: true` (Forgejo 15 then puts
+# ACTIONS_ID_TOKEN_REQUEST_URL/TOKEN in the job's environment) and its repository must be allowed by
+# the pool's provider and bound to the service account (infra-terraform google/forgejo_wif.tf).
+#
+# ⚠ The OIDC token itself is NOT refreshed: once it expires (its lifetime is printed below), a new
+# STS exchange fails. A job longer than that lifetime must call this action again before it.
+name: gcp-forgejo-auth
+description: Application Default Credentials from Forgejo OIDC through a workload identity pool.
+
+inputs:
+  workload_identity_provider:
+    description: Full provider name, projects/<number>/locations/global/workloadIdentityPools/<pool>/providers/<provider>.
+    required: true
+  service_account:
+    description: Email of the service account to impersonate.
+    required: true
+
+outputs:
+  credentials_file:
+    description: Path of the written ADC file (also exported as GOOGLE_APPLICATION_CREDENTIALS).
+    value: ${{ steps.adc.outputs.credentials_file }}
+
+runs:
+  using: composite
+  steps:
+    - name: OIDC token -> external_account ADC
+      id: adc
+      shell: bash
+      env:
+        PROVIDER: ${{ inputs.workload_identity_provider }}
+        SERVICE_ACCOUNT: ${{ inputs.service_account }}
+      run: |
+        set -euo pipefail
+        if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]; then
+          echo "::error::no OIDC request variables -- set 'enable-openid-connect: true' on the job"; exit 1
+        fi
+        case "$PROVIDER" in projects/*/locations/global/workloadIdentityPools/*/providers/*) ;;
+          *) echo "::error::workload_identity_provider '$PROVIDER' is not a full provider name"; exit 1 ;; esac
+        aud="//iam.googleapis.com/${PROVIDER}"
+        dir="${RUNNER_TEMP}/gcp-forgejo-auth"
+        mkdir -p "$dir"; chmod 700 "$dir"
+        curl -fsS --max-time 60 -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+          "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${aud}" \
+          | python3 -c 'import json,sys; sys.stdout.write(json.load(sys.stdin)["value"])' > "$dir/oidc.jwt"
+        chmod 600 "$dir/oidc.jwt"
+        echo "::add-mask::$(cat "$dir/oidc.jwt")"
+        python3 - "$dir" "$aud" "$SERVICE_ACCOUNT" <<'PY'
+        import base64, json, os, sys, time
+        d, aud, sa = sys.argv[1:4]
+        jwt = open(os.path.join(d, "oidc.jwt")).read().strip()
+        body = jwt.split(".")[1]
+        claims = json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
+        print(f"OIDC token for {claims.get('repository')} ({claims.get('event_name')}), "
+              f"valid {int(claims['exp'] - time.time())} s more")
+        adc = {
+            "type": "external_account",
+            "audience": aud,
+            "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+            "token_url": "https://sts.googleapis.com/v1/token",
+            "service_account_impersonation_url":
+                f"https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/{sa}:generateAccessToken",
+            "credential_source": {"file": os.path.join(d, "oidc.jwt")},
+        }
+        path = os.path.join(d, "adc.json")
+        with open(path, "w") as f:
+            json.dump(adc, f)
+        os.chmod(path, 0o600)
+        PY
+        {
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$dir/adc.json"
+          echo "CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE=$dir/adc.json"
+        } >> "$GITHUB_ENV"
+        echo "credentials_file=$dir/adc.json" >> "$GITHUB_OUTPUT"
