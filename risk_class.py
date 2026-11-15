@@ -36,6 +36,10 @@ ESCALATION_LABEL = "risk:escalated"
 ASK_PATTERNS: list[tuple[str, str]] = [
     (r"(^|/)[^/]*(openapi[^/]*external|external[^/]*openapi)[^/]*\.(json|ya?ml)$", "external API contract"),
     (r"(^|/)\.sops\.ya?ml$|\.enc\.(ya?ml|json|env)$", "encrypted secret"),
+    # The file that sets this repository's floor and ask paths. Every caller says "a PR that
+    # changes it is always Ask" and none enforced it: measured 2026-11-15 (narthelix/ops#2323),
+    # muznara-app PR 5 on Forgejo emptied `ask_paths`, came out Show and merged itself.
+    (r"^\.github/risk\.ya?ml$", "risk settings"),
 ]
 # Words found in real security code across the fleet that the first list
 # missed (narthelix/ops#2039, measured 2026-10-10): `security/password.py`,
