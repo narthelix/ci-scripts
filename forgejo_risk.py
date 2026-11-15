@@ -22,8 +22,14 @@ Order, and why:
      (gitea-mq) that bounces a PR cancels its merge and changes its labels, and re-scheduling on
      that label event re-queued the same red PR every 30 s (measured 2026-11-13, mq-pilot#7,
      narthelix/ops#2317). The author's next push schedules it again.
-  5. Ask (or escalated) on any event: cancel a merge that is already scheduled -- an escalation
-     label added by hand must stop it as the AI review's does.
+  5. Ask (or escalated) on any event: cancel a merge that THE MERGER scheduled -- an escalation
+     label added by hand must stop it as the AI review's does. A merge someone else scheduled on
+     an Ask PR is left alone: that is the person's decision an Ask PR waits for. Until v0.23.1
+     it was cancelled too, by this job's own run on the label the merge queue adds
+     (`mq/testing`): whether an approved Ask PR merged was a race between the queue's test and
+     this job, and in the repositories with a slow queue test it lost (measured 2026-11-15,
+     narthelix/ops#2323: gitops#2 and infra-terraform#8, each cancelled about two minutes after
+     it was queued). When who scheduled it cannot be read, the merge is cancelled as before.
 Anything else that fails is a warning and exit 0: a labelling hiccup must not turn every PR red,
 and without a label nothing is merged.
 """
@@ -77,6 +83,34 @@ def ensure_label_ids(api: Api) -> dict[str, int]:
     return have
 
 
+def scheduled_by(api: Api, pr: int) -> str | None:
+    """Login of whoever scheduled the merge that is still pending; None when none is."""
+    who, page = None, 1
+    while True:
+        events = api.call("GET", f"/issues/{pr}/timeline?limit=50&page={page}") or []
+        for e in events:
+            if e.get("type") == "pull_scheduled_merge":
+                who = (e.get("user") or {}).get("login")
+            elif e.get("type") == "pull_cancel_scheduled_merge":
+                who = None
+        if len(events) < 50:  # noqa: PLR2004 -- the page size asked for
+            return who
+        page += 1
+
+
+def cancel_merger_schedule(api: Api, pr: int, merger: str, why: str) -> int:
+    """On an Ask PR: cancel the merger's own scheduled merge, keep a person's."""
+    try:
+        who = scheduled_by(api, pr)
+    except (urllib.error.URLError, ValueError) as e:
+        print(f"::warning::who scheduled the merge could not be read ({e}) -- cancelling")
+        who = merger
+    if who and who != merger:
+        print(f"merge: scheduled by {who}, not by {merger} ({why}) -- left as it is")
+        return 0
+    return cancel_scheduled(api, pr, why)
+
+
 def cancel_scheduled(api: Api, pr: int, why: str) -> int:
     """Cancel a scheduled merge, if any. 404 = none was scheduled. Exit 1 when it cannot."""
     try:
@@ -111,7 +145,7 @@ def run(a: argparse.Namespace, api: Api) -> int:
         api.call("POST", f"/issues/{a.pr}/labels", {"labels": [ids[f"risk:{cls}"]]})
 
     if cls == "ask":
-        return cancel_scheduled(api, a.pr, "Ask")
+        return cancel_merger_schedule(api, a.pr, a.merger, "Ask")
     if pr.get("draft"):
         print("merge: not scheduled (draft)")
         return 0
@@ -139,6 +173,9 @@ def main() -> int:
     ap.add_argument("--action", default="", help="the pull_request event's action")
     ap.add_argument("--floor", default="ship", choices=list(risk_class.ORDER))
     ap.add_argument("--ask-paths", default="")
+    # The login behind FORGEJO_MERGER_TOKEN. Named, not asked from the API: the token's scopes
+    # stop at the repository and its issues.
+    ap.add_argument("--merger", default="merger-bot")
     a = ap.parse_args()
     token = os.environ.get("FORGEJO_MERGER_TOKEN", "")
     if not token:
