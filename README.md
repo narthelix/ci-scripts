@@ -153,6 +153,14 @@ auto-merge and the plan job's `GITHUB_TOKEN` (`contents: read`) cannot turn it
 off. Whatever the token, the plan job is red while auto-merge stays on -- until
 v0.21.0 the disable was silent and six escalated PRs merged themselves.
 
+**On Forgejo:** `actions/plan-risk-forgejo` + `forgejo_plan_risk.py`, the same classification
+(`tf_plan_risk.classify`). `mode: pr` labels `risk:escalated` and cancels a scheduled merge
+(`forgejo_review.escalate`); the `risk` workflow then calls the PR Ask, and merger-bot never
+schedules an Ask PR. `mode: apply` refuses an Ask plan unless the merged PR was Ask (`risk:ask` or
+`risk:escalated`): every Forgejo merge is the merge queue's bot, so "a person merged it" cannot be
+asked there -- an Ask PR is merged only with the founder's approval. Pass `merger_token` (a bot with
+write on the repository); the job's own token cannot cancel a merge another user scheduled.
+
 
 **Flaky tests (handbook ADR-0141).** `test_results.py` reports a case that failed and then passed
 on the runner's single retry as `flaky`, never `passed` -- jest marks it itself
