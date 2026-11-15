@@ -1,0 +1,41 @@
+name: plan-risk-forgejo
+description: >-
+  plan-risk on Forgejo (ADR-0128): escalate a Terraform PR to Ask on a risky plan; refuse a risky
+  apply unless the merged PR was Ask. The GitHub counterpart is actions/plan-risk.
+
+inputs:
+  plan_file:
+    description: Path to the human plan text (terraform plan -no-color / terraform show -no-color).
+    required: true
+  mode:
+    description: pr | apply
+    required: true
+  merger_token:
+    description: >-
+      Token of a bot with write on the repository (labels, cancelling a scheduled merge, reading
+      the merged PR). The job's own token cannot cancel a merge another user scheduled.
+    required: true
+  sensitive:
+    description: Optional regex over resource types that count as access-related (replaces the default).
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Plan risk
+      shell: bash
+      env:
+        FORGEJO_MERGER_TOKEN: ${{ inputs.merger_token }}
+        PLAN_FILE: ${{ inputs.plan_file }}
+        MODE: ${{ inputs.mode }}
+        SENSITIVE: ${{ inputs.sensitive }}
+        URL: ${{ github.server_url }}
+        REPO: ${{ github.repository }}
+        PR: ${{ github.event.pull_request.number }}
+        SHA: ${{ github.sha }}
+      run: |
+        set -uo pipefail
+        root="$GITHUB_ACTION_PATH/../.."
+        PYTHONPATH="$root" python3 "$root/forgejo_plan_risk.py" --url "$URL" --repo "$REPO" \
+          --mode "$MODE" --plan-file "$PLAN_FILE" --pr "${PR:-0}" --sha "$SHA" --sensitive "$SENSITIVE"
