@@ -4,7 +4,8 @@
 What matters: a label event never (re)schedules a merge -- a merge queue that bounces a PR
 changes its labels, and re-scheduling then re-queued the same red PR every 30 s (mq-pilot#7,
 narthelix/ops#2317); a push or (re)open does schedule; an Ask or escalated PR has a merge that
-is already scheduled cancelled, on any event, and a failed cancel is exit 1.
+the MERGER scheduled cancelled, on any event, and a failed cancel is exit 1 -- while a merge a
+person scheduled on an Ask PR stays (the queue's own label used to cancel it, narthelix/ops#2323).
 """
 
 from __future__ import annotations
@@ -32,7 +33,8 @@ CODE = "diff --git a/src/x.py b/src/x.py\nindex 1..2 100644\n--- a/src/x.py\n+++
 
 
 class FakeApi:
-    def __init__(self, labels=(), draft=False, cancel_error=None) -> None:
+    def __init__(self, labels=(), draft=False, cancel_error=None, timeline=None) -> None:
+        self.timeline = timeline
         self.live = list(labels)
         self.draft = draft
         self.cancel_error = cancel_error
@@ -49,6 +51,11 @@ class FakeApi:
             return [{"name": f"risk:{c}", "id": i} for i, c in enumerate(("ship", "show", "ask"))]
         if path == "/pulls/7" and method == "GET":
             return {"draft": self.draft}
+        if path.startswith("/issues/7/timeline"):
+            if isinstance(self.timeline, Exception):
+                raise self.timeline
+            page = int(path.rsplit("=", 1)[1])
+            return (self.timeline or [])[(page - 1) * 50:page * 50]
         if path == "/pulls/7/merge" and method == "DELETE" and self.cancel_error:
             raise self.cancel_error
         return {}
@@ -56,7 +63,7 @@ class FakeApi:
 
 def run(action, **kw) -> tuple[int, bool, bool]:
     api = FakeApi(**kw)
-    a = argparse.Namespace(pr=7, action=action, floor="ship", ask_paths="")
+    a = argparse.Namespace(pr=7, action=action, floor="ship", ask_paths="", merger="merger-bot")
     out, sys.stdout = sys.stdout, io.StringIO()
     try:
         rc = fr.run(a, api)
@@ -81,6 +88,29 @@ check("escalated by hand on 'labeled' -> scheduled merge cancelled",
 check("ask, nothing scheduled (404) -> ok", run("opened", labels=["risk:escalated"], cancel_error=http(404)),
       (0, False, True))
 check("ask, cancel fails -> exit 1", run("labeled", labels=["risk:escalated"], cancel_error=http(500))[0], 1)
+
+
+def ev(kind: str, login: str) -> dict:
+    return {"type": kind, "user": {"login": login}}
+
+
+SCHED, CANCEL = "pull_scheduled_merge", "pull_cancel_scheduled_merge"
+ASK = {"labels": ["risk:escalated"]}
+check("ask, merge scheduled by the merger -> cancelled",
+      run("labeled", timeline=[ev(SCHED, "merger-bot")], **ASK), (0, False, True))
+check("ask, merge scheduled by a person, the queue's label event -> kept",
+      run("labeled", timeline=[ev("label", "mq-bot"), ev(SCHED, "claude-code"), ev("label", "mq-bot")], **ASK),
+      (0, False, False))
+check("ask, a person's merge was cancelled and the merger scheduled after -> cancelled",
+      run("labeled", timeline=[ev(SCHED, "hasan"), ev(CANCEL, "hasan"), ev(SCHED, "merger-bot")], **ASK),
+      (0, False, True))
+check("ask, the merger's merge was cancelled and a person scheduled after -> kept",
+      run("unlabeled", timeline=[ev(SCHED, "merger-bot"), ev(CANCEL, "merger-bot"), ev(SCHED, "hasan")], **ASK),
+      (0, False, False))
+check("ask, a person's merge on the second timeline page -> kept",
+      run("labeled", timeline=[ev("comment", "x")] * 50 + [ev(SCHED, "hasan")], **ASK), (0, False, False))
+check("ask, the timeline cannot be read -> cancelled, as before",
+      run("labeled", timeline=http(500), **ASK), (0, False, True))
 
 print(f"\n{'FAIL' if FAILS else 'ok'}: {FAILS} başarısız")
 sys.exit(1 if FAILS else 0)
