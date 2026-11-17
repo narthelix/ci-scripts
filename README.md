@@ -124,14 +124,12 @@ job on one that can pushes them -- no artifact, no new network path:
                 context: platform=ios, summary: 'false', push_url: <the caller's> }
 ```
 
-### README badges (narthelix/ops#2089 T19)
+### Coverage on the run line (narthelix/ops#2089 T19)
 
-`badge.py LABEL MESSAGE COLOR` writes a flat SVG badge (stdlib). The badges live on each
-repository's `badges` branch, written by an in-cluster job from the test results in Loki, and the
-README links them by the **full** address, `https://github.com/<org>/<repo>/raw/badges/<f>.svg`:
-measured in a private repository, that renders for anyone who can read it, while a relative path
-resolves against the branch being viewed and breaks. `test_results.py --coverage` puts the line
-coverage of `coverage.xml` / `lcov.info` on the run line those badges read.
+`test_results.py --coverage` puts the line coverage of `coverage.xml` / `lcov.info` on the run
+line in Loki, which the "Test sagligi" dashboard's coverage trend reads. The README badges that
+also read it (`badge.py`, a `badges` branch per repository) were dropped on 2026-11-17
+(narthelix/ops#2345): no one read them, and their hourly queries were most of Loki's CPU.
 
 ### Risk class by effect (narthelix/ops#2055)
 

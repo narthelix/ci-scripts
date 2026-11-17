@@ -6,7 +6,7 @@ Reads the result files a test run already wrote and does two things with them:
     summary  a Markdown block for the job summary: totals, every failure, the slowest cases
     push     one Loki line per test case (and one per run) to a push URL, when one is given
     coverage the line coverage of a coverage report (Cobertura XML or lcov), on the run line --
-             the number the README badge and the dashboard's coverage trend read
+             the number the dashboard's coverage trend reads
     pack     the result files as one compact string, for a job output -- when the job that ran
              the tests cannot reach the receiver (a Mac runner), a later job that can (an
              in-cluster runner) unpacks and pushes them. No artifact, no new network path.
