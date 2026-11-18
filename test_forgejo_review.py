@@ -126,5 +126,22 @@ check("schema requires the verdict fields", sorted(schema["required"]), ["critic
 check("prompt fills", "{" not in fr.PROMPT.format(repo="r", pr=1, cls="show", title="t", diff=Path("/d"), body="b")
       .replace("{}", ""), True)
 
+
+# ADR-0155 step 3: an agent's PR is reviewed again when a push changes it, not when a rebase moves it.
+AGENT = {**PR, "user": {"login": "claude-code"}}
+check("push to an agent's PR -> provisional review", fr.decide("synchronized", AGENT, REVIEWED)[0], True)
+check("push to a person's PR -> pass", fr.decide("synchronized", PR, REVIEWED)[0], False)
+check("push to an agent's draft -> pass", fr.decide("synchronized", {**AGENT, "draft": True}, [])[0], False)
+D1 = "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1,3 +1,3 @@\n-old\n+new\n"
+D2 = "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -10,3 +10,3 @@\n-old\n+new\n"
+D3 = D1 + "+one more line\n"
+check("a rebase (hunk moved) has the same key", fr.diff_key(D1) == fr.diff_key(D2), True)
+check("a new line has a new key", fr.diff_key(D1) == fr.diff_key(D3), False)
+KEYED = [{"body": f"{fr.MARKER}\n<!-- ai-review diff={fr.diff_key(D1)} -->\n**AI review**"}]
+check("the last reviewed key is read back", fr.last_reviewed_key(KEYED), fr.diff_key(D1))
+check("render carries the key", f"diff={fr.diff_key(D1)}" in fr.render({**OK}, fr.diff_key(D1)), True)
+check("the rubric names scope and irreversibility",
+      ("do not cover" in fr.PROMPT, "cannot be undone" in fr.PROMPT), (True, True))
+
 print(f"\n{'FAIL' if FAILS else 'ok'}: {FAILS} başarısız")
 sys.exit(1 if FAILS else 0)
