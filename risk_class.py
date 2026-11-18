@@ -40,6 +40,12 @@ ASK_PATTERNS: list[tuple[str, str]] = [
     # changes it is always Ask" and none enforced it: measured 2026-11-15 (narthelix/ops#2323),
     # muznara-app PR 5 on Forgejo emptied `ask_paths`, came out Show and merged itself.
     (r"^\.github/risk\.ya?ml$", "risk settings"),
+    # What the agents obey (CLAUDE.md "red lines"): a change to their instructions or their
+    # harness settings is the founder's call in every repository. Measured 2026-11-18
+    # (narthelix/ops#2358): with no repository rule CLAUDE.md came out Ship and .claude/
+    # settings.json Show, and workspace#18 merged a CLAUDE.md change by itself.
+    (r"(^|/)(CLAUDE|AGENTS)\.md$", "agent instructions"),
+    (r"(^|/)\.claude/", "agent harness settings"),
 ]
 # Words found in real security code across the fleet that the first list
 # missed (narthelix/ops#2039, measured 2026-10-10): `security/password.py`,
