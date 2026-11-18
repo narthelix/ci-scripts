@@ -139,6 +139,13 @@ change whose every changed line is a SHA/version pin is Show. Everything else
 in those paths stays Ask, and so does anything it cannot read (no diff, a
 deleted or edited migration).
 
+A Forgejo risk workflow's own ci-scripts pin (`CI_SCRIPTS_SHA: <sha> # ci-scripts vX.Y.Z` in
+`.forgejo/workflows/risk.yml`) counts as a pin only when the new commit is one of this repository's
+`v*` tags: `forgejo_risk.py` reads them from `<owner>/ci-scripts` (`--pin-repo`) and passes them as
+`trusted_pins`. That workflow decides merges and holds the merger token, so an untagged commit -- a
+branch of an unreviewed PR is in the Forgejo copy too -- or a tag list that cannot be read stays Ask
+(narthelix/ops#2319). Renovate opens these bumps on each tag (`narthelix/.github` preset).
+
 `actions/plan-risk` + `tf_plan_risk.py` are for infrastructure repositories
 that set `risk_floor: show`. Call it from the plan job (`mode: pr`, the job
 must be a required check) and from the apply job before applying

@@ -64,6 +64,12 @@ MIGRATION_PATH = re.compile(r"(^|/)(migrations?|alembic)/")
 # A changed line in a workflow that only moves a pin: `uses: x@<40-hex> # vN`
 # or a `version:` value -- what Renovate and the gates SHA sweeps produce.
 PIN_LINE = re.compile(r"^\s*(-\s*)?uses:\s*\S+@[0-9a-f]{40}(\s+#.*)?\s*$|^\s*version:\s*\S+\s*$")
+# The ci-scripts pin of a Forgejo risk workflow (`CI_SCRIPTS_SHA: <40-hex> # ci-scripts vX.Y.Z`).
+# That workflow decides merges and holds the merger token, so this line is a pin bump only when the
+# NEW commit is a released one: its SHA must be in `trusted_pins` (the caller passes the commits of
+# ci-scripts' `v*` tags). Unknown -- an untagged branch commit, or no list at all -- stays Ask
+# (narthelix/ops#2319). The removed line is never the risk.
+CI_SCRIPTS_PIN = re.compile(r"^\s*CI_SCRIPTS_SHA:\s*([0-9a-f]{40})(\s+#.*)?\s*$")
 # What a migration must not do without the founder: drop, rename, retype,
 # rewrite data or run raw SQL (the last because nothing can read it).
 DESTRUCTIVE = re.compile(
@@ -81,14 +87,23 @@ def _changed(patch: str) -> list[str]:
     return [line for line in patch.splitlines() if line[:1] in "+-" and not line.startswith(("+++", "---"))]
 
 
-def ci_effect(status: str, patch: str | None) -> str | None:
+def _pin_only(line: str, trusted_pins: frozenset[str]) -> bool:
+    """`line` keeps its +/- sign: an added ci-scripts pin must be a trusted (tagged) commit."""
+    sign, code = line[:1], line[1:]
+    if PIN_LINE.match(code):
+        return True
+    m = CI_SCRIPTS_PIN.match(code)
+    return bool(m) and (sign == "-" or m.group(1) in trusted_pins)
+
+
+def ci_effect(status: str, patch: str | None, trusted_pins: frozenset[str] = frozenset()) -> str | None:
     """None when the change only moves pins; otherwise why it is Ask."""
     if status == "removed":
         return "CI workflow deleted"
     if patch is None:
         return "CI workflow (diff unavailable)"
-    lines = [ln[1:] for ln in _changed(patch) if ln[1:].strip()]
-    if lines and all(PIN_LINE.match(ln) for ln in lines):
+    lines = [ln for ln in _changed(patch) if ln[1:].strip()]
+    if lines and all(_pin_only(ln, trusted_pins) for ln in lines):
         return None
     return "CI workflow"
 
@@ -122,6 +137,7 @@ def classify(
     labels: list[str] | None = None,
     extra_ask: list[str] | None = None,
     floor: str = "ship",
+    trusted_pins: frozenset[str] = frozenset(),
 ) -> tuple[str, list[str]]:
     """Return (class, reasons). The highest class wins; nothing lowers one."""
     ask = [(re.compile(p), why) for p, why in ASK_PATTERNS]
@@ -146,7 +162,7 @@ def classify(
         lowrisk = bool(DOC.search(path) or TEST.search(path))
         hit = next((why for rx, why in ask if rx.search(path)), None)
         if not hit and CI_PATH.search(path):
-            effect = ci_effect(status, patch)
+            effect = ci_effect(status, patch, trusted_pins)
             if effect is None:
                 raise_to("show", f"CI pin bump: {path}")
                 continue

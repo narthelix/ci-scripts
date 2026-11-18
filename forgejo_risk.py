@@ -74,6 +74,11 @@ class Api:
             return data.decode("utf-8", "replace")
         return json.loads(data) if data else None
 
+    def for_repo(self, repo: str) -> Api:
+        """The same forge and token, another repository (the ci-scripts copy whose tags we trust)."""
+        url = self.base.split("/api/v1/repos/", 1)[0]
+        return Api(url, repo, self.token)
+
     def labels(self, pr: int) -> list[str]:
         return [x["name"] for x in self.call("GET", f"/issues/{pr}/labels")]
 
@@ -133,11 +138,32 @@ def cancel_scheduled(api: Api, pr: int, why: str) -> int:
     return 0
 
 
+def tagged_commits(api: Api) -> frozenset[str]:
+    """Commits of `repo`'s `v*` tags: the only ci-scripts pins a Show PR may move to.
+    Empty when they cannot be read -- the pin change is then Ask (fail closed)."""
+    shas: set[str] = set()
+    page = 1
+    try:
+        while True:
+            tags = api.call("GET", f"/tags?limit=50&page={page}") or []
+            shas.update(t["commit"]["sha"] for t in tags if t.get("name", "").startswith("v"))
+            if len(tags) < 50:  # noqa: PLR2004 -- the page size asked for
+                return frozenset(shas)
+            page += 1
+    except (urllib.error.URLError, KeyError, ValueError, TypeError) as e:
+        print(f"::warning::ci-scripts tags could not be read ({e}) -- a ci-scripts pin change stays Ask")
+        return frozenset()
+
+
 def run(a: argparse.Namespace, api: Api) -> int:
     pr = api.call("GET", f"/pulls/{a.pr}")
     live = api.labels(a.pr)
     files = [(f["status"], f["filename"], f["patch"]) for f in forgejo_pr_files.split(api.call("GET", f"/pulls/{a.pr}.diff", raw=True))]
-    cls, reasons = risk_class.classify(files, live, a.ask_paths.split(), a.floor)
+    trusted: frozenset[str] = frozenset()
+    if any(risk_class.CI_PATH.search(f[1]) for f in files):
+        pin_repo = getattr(a, "pin_repo", "") or f"{a.repo.split('/')[0]}/ci-scripts"
+        trusted = tagged_commits(api.for_repo(pin_repo))
+    cls, reasons = risk_class.classify(files, live, a.ask_paths.split(), a.floor, trusted)
     print(f"class={cls}")
     for r in reasons[:50]:
         print(f"reason={r}")
@@ -181,6 +207,9 @@ def main() -> int:
     # The login behind FORGEJO_MERGER_TOKEN. Named, not asked from the API: the token's scopes
     # stop at the repository and its issues.
     ap.add_argument("--merger", default="merger-bot")
+    # Whose `v*` tags make a CI_SCRIPTS_SHA move a pin bump (risk_class.CI_SCRIPTS_PIN). Default:
+    # `<owner of --repo>/ci-scripts`, the copy the risk workflow fetches this script from.
+    ap.add_argument("--pin-repo", default="")
     a = ap.parse_args()
     token = os.environ.get("FORGEJO_MERGER_TOKEN", "")
     if not token:
