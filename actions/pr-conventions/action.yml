@@ -20,7 +20,7 @@ inputs:
     default: 'true'
   branch_pattern:
     required: false
-    default: '^(feature|fix|chore|docs|refactor)/[1-9][0-9]*-[a-z0-9]+(-[a-z0-9]+)*$'
+    default: '^(feat|feature|fix|chore|docs|refactor)/[1-9][0-9]*-[a-z0-9]+(-[a-z0-9]+)*$'
   exempt_authors:
     description: Comma-separated bot logins exempt from both checks.
     required: false
@@ -70,7 +70,7 @@ runs:
       run: |
         if [[ ! "$BRANCH" =~ $PATTERN ]]; then
           echo "::error::Branch name '$BRANCH' does not match <type>/<issue-no>-<kebab-description>"
-          echo "Expected pattern: $PATTERN (types: feature, fix, chore, docs, refactor)"
+          echo "Expected pattern: $PATTERN (types: feat or feature, fix, chore, docs, refactor)"
           exit 1
         fi
 

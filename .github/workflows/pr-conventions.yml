@@ -51,7 +51,7 @@ on:
       branch_pattern:
         required: false
         type: string
-        default: '^(feature|fix|chore|docs|refactor)/[1-9][0-9]*-[a-z0-9]+(-[a-z0-9]+)*$'
+        default: '^(feat|feature|fix|chore|docs|refactor)/[1-9][0-9]*-[a-z0-9]+(-[a-z0-9]+)*$'
       exempt_authors:
         description: >-
           Comma-separated bot logins. Their branch names can never match the
