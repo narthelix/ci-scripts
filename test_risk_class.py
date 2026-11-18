@@ -129,5 +129,28 @@ check("additive migration + auth code -> ask",
 check("additive migration under a floor of ask -> ask",
       cp([("added", "migrations/versions/0042.py", ADDITIVE)], floor="ask"), "ask")
 
+# The ci-scripts pin of a Forgejo risk workflow (narthelix/ops#2319): Show only when the new
+# commit is a tagged release; the risk workflow decides merges.
+OLD_PIN, NEW_PIN, BRANCH = "5f3200798867f8ae77ceb9b3692e26770a818adf", "5678162401a99a34b484ed335105c712d099c4f9", "9" * 40
+RISKPIN = (
+    "@@ -32,7 +32,7 @@\n"
+    f"-          CI_SCRIPTS_SHA: {OLD_PIN} # ci-scripts v0.23.0, narthelix/ci-scripts#65\n"
+    f"+          CI_SCRIPTS_SHA: {NEW_PIN} # ci-scripts v0.23.2, narthelix/ci-scripts#65\n"
+)
+RISK = ".forgejo/workflows/risk.yml"
+check("ci-scripts pin to a tagged commit -> show",
+      cp([("modified", RISK, RISKPIN)], trusted_pins=frozenset({NEW_PIN})), "show")
+check("ci-scripts pin, no tag list (lookup failed) -> ask", cp([("modified", RISK, RISKPIN)]), "ask")
+check("ci-scripts pin to an untagged commit -> ask",
+      cp([("modified", RISK, RISKPIN.replace(NEW_PIN, BRANCH))], trusted_pins=frozenset({NEW_PIN})), "ask")
+check("NEGATIVE CONTROL ci-scripts pin + another edit -> ask",
+      cp([("modified", RISK, RISKPIN + "-          floor=ship\n+          floor=show\n")],
+         trusted_pins=frozenset({NEW_PIN})), "ask")
+check("ci-scripts pin under a floor of ask -> ask",
+      cp([("modified", RISK, RISKPIN)], trusted_pins=frozenset({NEW_PIN}), floor="ask"), "ask")
+check("ci-scripts pin with a uses: pin bump -> show",
+      cp([("modified", RISK, RISKPIN), ("modified", ".forgejo/workflows/ci.yml", PIN)],
+         trusted_pins=frozenset({NEW_PIN})), "show")
+
 print(f"\n{'FAIL' if FAILS else 'ok'}: {FAILS} başarısız")
 sys.exit(1 if FAILS else 0)

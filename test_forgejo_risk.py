@@ -33,12 +33,18 @@ CODE = "diff --git a/src/x.py b/src/x.py\nindex 1..2 100644\n--- a/src/x.py\n+++
 
 
 class FakeApi:
-    def __init__(self, labels=(), draft=False, cancel_error=None, timeline=None) -> None:
+    def __init__(self, labels=(), draft=False, cancel_error=None, timeline=None, diff=None, tags=None) -> None:
+        self.diff = diff
+        self.tags = tags
         self.timeline = timeline
         self.live = list(labels)
         self.draft = draft
         self.cancel_error = cancel_error
         self.calls: list[tuple[str, str]] = []
+
+    def for_repo(self, repo):
+        self.calls.append(("REPO", repo))
+        return self
 
     def labels(self, pr):
         return list(self.live)
@@ -46,7 +52,11 @@ class FakeApi:
     def call(self, method, path, body=None, raw=False):
         self.calls.append((method, path))
         if path.endswith(".diff"):
-            return CODE
+            return self.diff or CODE
+        if path.startswith("/tags"):
+            if isinstance(self.tags, Exception):
+                raise self.tags
+            return self.tags or []
         if path.startswith("/labels") and method == "GET":
             return [{"name": f"risk:{c}", "id": i} for i, c in enumerate(("ship", "show", "ask"))]
         if path == "/pulls/7" and method == "GET":
@@ -111,6 +121,36 @@ check("ask, a person's merge on the second timeline page -> kept",
       run("labeled", timeline=[ev("comment", "x")] * 50 + [ev(SCHED, "hasan")], **ASK), (0, False, False))
 check("ask, the timeline cannot be read -> cancelled, as before",
       run("labeled", timeline=http(500), **ASK), (0, False, True))
+
+# A ci-scripts pin bump in the risk workflow (narthelix/ops#2319): Show, and scheduled, only when the
+# new commit is one of ci-scripts' v* tags; the tags are read from <owner>/ci-scripts.
+NEW = "5678162401a99a34b484ed335105c712d099c4f9"
+PINDIFF = (
+    "diff --git a/.forgejo/workflows/risk.yml b/.forgejo/workflows/risk.yml\n"
+    "--- a/.forgejo/workflows/risk.yml\n+++ b/.forgejo/workflows/risk.yml\n@@ -32,1 +32,1 @@\n"
+    "-          CI_SCRIPTS_SHA: 5f3200798867f8ae77ceb9b3692e26770a818adf # ci-scripts v0.23.0\n"
+    f"+          CI_SCRIPTS_SHA: {NEW} # ci-scripts v0.23.2\n"
+)
+TAGS = [{"name": "v0.23.2", "commit": {"sha": NEW}}, {"name": "latest", "commit": {"sha": "1" * 40}}]
+
+
+def run_pin(tags, action="opened"):
+    api = FakeApi(diff=PINDIFF, tags=tags)
+    a = argparse.Namespace(pr=7, action=action, floor="ship", ask_paths="", merger="merger-bot", repo="narthelix/x", pin_repo="")
+    out = sys.stdout
+    sys.stdout = io.StringIO()
+    try:
+        rc = fr.run(a, api)
+    finally:
+        sys.stdout = out
+    return rc, ("POST", "/pulls/7/merge") in api.calls, ("REPO", "narthelix/ci-scripts") in api.calls
+
+
+check("ci-scripts pin to a v* tag -> show, scheduled, tags read from <owner>/ci-scripts", run_pin(TAGS), (0, True, True))
+check("ci-scripts pin, the commit is no v* tag -> ask, not scheduled",
+      run_pin([{"name": "latest", "commit": {"sha": NEW}}])[:2], (0, False))
+check("ci-scripts pin, tags cannot be read -> ask, not scheduled", run_pin(http(500))[:2], (0, False))
+check("ci-scripts pin on Forgejo's push event -> scheduled", run_pin(TAGS, "synchronized")[:2], (0, True))
 
 print(f"\n{'FAIL' if FAILS else 'ok'}: {FAILS} başarısız")
 sys.exit(1 if FAILS else 0)
