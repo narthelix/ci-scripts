@@ -14,7 +14,7 @@ Order, and why:
   2. Classify its diff (pulls/N.diff -> forgejo_pr_files.split -> risk_class.classify).
   3. Set exactly one risk:<class> label.
   4. Ship/Show, not a draft, and the event is one that SCHEDULES (opened, reopened,
-     synchronize, edited, ready_for_review -- `--action`): schedule "merge when checks succeed"
+     synchronize/synchronized, edited, ready_for_review -- `--action`): schedule "merge when checks succeed"
      (squash). Then read the labels AGAIN -- an escalation that landed in between cancels the
      scheduled merge. If that cancel fails, exit 1: a red check is then the only thing between
      that PR and a merge.
@@ -48,7 +48,12 @@ import risk_class
 
 COLORS = {"ship": "#0e8a16", "show": "#fbca04", "ask": "#d93f0b"}
 # Events that (re)schedule a Ship/Show merge. Empty = a caller that predates --action: as before.
-SCHEDULE_ACTIONS = {"", "opened", "reopened", "synchronize", "edited", "ready_for_review"}
+# A push is `synchronize` on GitHub but `synchronized` on Forgejo (`github.event.action`, measured
+# 2026-11-18, narthelix/ops#2319). With only the GitHub name, every push after the first -- Renovate
+# rebasing its PRs each night -- left a green Show PR unscheduled: 8 sat open for 2-3 days and
+# re-ran their whole CI on every rebase. Label events (`labeled`/`unlabeled`, Forgejo's
+# `label_updated`/`label_cleared`) stay out on purpose (the queue loop below).
+SCHEDULE_ACTIONS = {"", "opened", "reopened", "synchronize", "synchronized", "edited", "ready_for_review"}
 
 
 class Api:
