@@ -72,9 +72,9 @@ def run(action, **kw) -> tuple[int, bool, bool]:
     return rc, ("POST", "/pulls/7/merge") in api.calls, ("DELETE", "/pulls/7/merge") in api.calls
 
 
-for action in ("opened", "synchronize", "reopened", "edited", "ready_for_review", ""):
+for action in ("opened", "synchronize", "synchronized", "reopened", "edited", "ready_for_review", ""):
     check(f"show on '{action or '(no --action)'}' -> scheduled", run(action)[:2], (0, True))
-for action in ("labeled", "unlabeled"):
+for action in ("labeled", "unlabeled", "label_updated", "label_cleared"):
     check(f"show on '{action}' -> NOT rescheduled (the queue loop)", run(action)[:2], (0, False))
 check("draft -> not scheduled", run("opened", draft=True)[:2], (0, False))
 
