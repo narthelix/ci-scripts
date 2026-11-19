@@ -37,6 +37,13 @@ NO_CHANGES = re.compile(
 )
 ERROR = re.compile(r"^\s*(│\s*)?Error: ")
 
+# A plan that changes more than this many resources is Ask whatever the types (narthelix/ops#2316):
+# on 2026-11-19 infra-terraform#41 planned 39 in-place updates of `github_repository` -- each one
+# harmless-looking, together a stack moved under a reader that could not see half the fields -- and
+# it merged inside an envelope because none of them was destructive or access-related. A plan that
+# size wants a person reading it, not a type list.
+LARGE_PLAN = 10
+
 DESTRUCTIVE = ("will be destroyed", "must be replaced", "will be replaced", "is tainted, so must be replaced")
 CHANGING = DESTRUCTIVE + ("will be created", "will be updated in-place")
 
@@ -65,15 +72,20 @@ def classify(plan: str, sensitive: str = SENSITIVE_TYPES) -> tuple[str, list[str
         return "ask", ["plan summary not found: unreadable plan fails closed"]
     sensitive_rx = re.compile(sensitive)
     reasons: list[str] = []
+    changing = 0
     for line in lines:
         m = ACTION.match(line)
         if not m:
             continue
         addr, what = m.group("addr"), m.group("what")
+        if what in CHANGING:
+            changing += 1
         if what in DESTRUCTIVE:
             reasons.append(f"{what}: {addr}")
         elif what in CHANGING and sensitive_rx.search(resource_type(addr)):
             reasons.append(f"access-related resource {what.split()[-1]}: {addr}")
+    if changing > LARGE_PLAN:
+        reasons.append(f"large plan: {changing} resources change (more than {LARGE_PLAN})")
     if reasons:
         return "ask", reasons
     return "show", ["plan only creates or updates non-sensitive resources"]
