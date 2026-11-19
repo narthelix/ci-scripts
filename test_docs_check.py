@@ -32,6 +32,24 @@ def run(files: dict[str, str]) -> list[str]:
 
 CASES: list[tuple[str, dict[str, str], int]] = [
     (
+        # Measured 2026-11-19: the workspace root's pre-push check read repo-template's
+        # `template/AGENTS.md`, whose `CLAUDE.md` exists only as `CLAUDE.md.jinja`.
+        "a nested clone is another repository's gate (.git directory)",
+        {"repo-template/.git/HEAD": "ref: refs/heads/main",
+         "repo-template/template/AGENTS.md": "[`CLAUDE.md`](CLAUDE.md)"},
+        0,
+    ),
+    (
+        "a nested worktree or submodule too (.git file)",
+        {"wt/.git": "gitdir: /elsewhere", "wt/docs/a.md": "[x](missing.md)"},
+        0,
+    ),
+    (
+        "the root's own documents are still checked",
+        {".git/HEAD": "ref: refs/heads/main", "docs/a.md": "[x](missing.md)"},
+        1,
+    ),
+    (
         "resolving link passes",
         {"a.md": "[x](b.md)", "b.md": "hi"},
         0,

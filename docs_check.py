@@ -68,9 +68,33 @@ def strip_code(line: str) -> str:
     return re.sub(r"`[^`]*`", lambda m: " " * len(m.group(0)), line)
 
 
+def _nested_repository(root: pathlib.Path, path: pathlib.Path, seen: dict[pathlib.Path, bool]) -> bool:
+    """Whether `path` lies inside another git repository below `root`.
+
+    The workspace root is itself a repository whose clones of every other repository sit inside
+    it, git-ignored. Its pre-push hook runs this with `--root .`, so without this it judged every
+    clone's documents -- each checked by its own repository's gate -- and on 2026-11-19 refused a
+    workspace push over `repo-template/template/AGENTS.md`, whose `CLAUDE.md` is `CLAUDE.md.jinja`
+    until the template is rendered (narthelix/ops#2356). `.git` is a directory in a clone and a
+    file in a worktree or submodule; either marks a repository of its own.
+    """
+    for parent in path.relative_to(root).parents:
+        if parent == pathlib.Path("."):
+            break
+        here = root / parent
+        if here not in seen:
+            seen[here] = (here / ".git").exists()
+        if seen[here]:
+            return True
+    return False
+
+
 def iter_markdown(root: pathlib.Path):
+    seen: dict[pathlib.Path, bool] = {}
     for path in sorted(root.rglob("*.md")):
         if SKIP_DIRS & set(path.relative_to(root).parts):
+            continue
+        if _nested_repository(root, path, seen):
             continue
         yield path
 
