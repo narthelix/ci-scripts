@@ -197,12 +197,22 @@ def escalate(api: Api, pr: int) -> None:
 def publish(a: argparse.Namespace, api: Api) -> int:
     v = read_verdict(a.result)
     if v is None:
+        # Fail closed (narthelix/ops#2316): an unreviewed PR is escalated like a critical one, so
+        # neither an envelope nor the merger merges it on the review's silence. On 2026-11-19
+        # infra-terraform#40 and #41 merged with "not reviewed". Ship PRs never get here: prepare
+        # skips their review and publish is not called.
         run = f" ([run]({a.run}))" if a.run else ""
+        try:
+            escalate(api, a.pr)
+        except (urllib.error.URLError, KeyError, ValueError) as e:
+            print(f"::error::review did not run and escalation failed -- stop this PR by hand: {e}")
+            return 1
         api.call("POST", f"/issues/{a.pr}/comments", {"body": (
-            f"{FAILED_MARKER}\n⚠️ The AI review could not run{run}. This PR was **not reviewed**; "
-            "close and reopen it to retry."
+            f"{FAILED_MARKER}\n⚠️ The AI review could not run{run}. This PR was **not reviewed**, so "
+            f"it is escalated (`{risk_class.ESCALATION_LABEL}`): it merges only on the founder's "
+            "approve. Close and reopen it to retry the review."
         )})
-        print("::warning::review did not run -- said so on the PR, not blocking")
+        print("::warning::review did not run -- escalated, the PR waits for the founder")
         return 0
     print(f"verdict: critical={v['critical']} findings={len(v.get('findings', []))}")
     # Escalate BEFORE commenting: a comment that fails must not leave a critical PR mergeable.

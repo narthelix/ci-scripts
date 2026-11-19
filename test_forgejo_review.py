@@ -89,6 +89,10 @@ class FakeApi:
         return {}
 
 
+def http(code: int) -> urllib.error.HTTPError:
+    return urllib.error.HTTPError("u", code, "x", {}, None)
+
+
 def run_publish(obj, fail=None) -> tuple[int, list]:
     api = FakeApi(fail)
     a = argparse.Namespace(pr=7, result=verdict_file(obj), run="")
@@ -103,15 +107,16 @@ def run_publish(obj, fail=None) -> tuple[int, list]:
 rc, calls = run_publish({"structured_output": OK})
 check("clean verdict -> comment only", (rc, [c for c in calls if c[0] != "GET"]), (0, [("POST", "/issues/7/comments")]))
 rc, calls = run_publish({"is_error": True})
-check("did not run -> says so, exit 0", (rc, calls), (0, [("POST", "/issues/7/comments")]))
+# infra-terraform#40/#41 (2026-11-19): "not reviewed" merged. It now escalates like a critical one.
+check("did not run -> escalated (label, merge cancelled) and said, exit 0",
+      (rc, ("POST", "/issues/7/labels") in calls, ("DELETE", "/pulls/7/merge") in calls,
+       calls[-1] == ("POST", "/issues/7/comments")), (0, True, True, True))
+rc, _ = run_publish({"is_error": True}, {("POST", "/issues/7/labels"): http(403)})
+check("did not run, escalation fails -> exit 1", rc, 1)
 CRIT = {"structured_output": {**OK, "critical": True, "reason": "drops a table"}}
 rc, calls = run_publish(CRIT)
 check("critical -> label created+added, merge cancelled", (rc, ("POST", "/labels") in calls,
       ("POST", "/issues/7/labels") in calls, ("DELETE", "/pulls/7/merge") in calls), (0, True, True, True))
-
-
-def http(code: int) -> urllib.error.HTTPError:
-    return urllib.error.HTTPError("u", code, "x", {}, None)
 
 
 rc, _ = run_publish(CRIT, {("DELETE", "/pulls/7/merge"): http(404)})

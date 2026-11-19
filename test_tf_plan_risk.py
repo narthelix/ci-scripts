@@ -114,5 +114,16 @@ check("resource_type strips module and index",
       tr.resource_type('module.a.module.b.google_project_iam_member.x["k"]'), "google_project_iam_member")
 check("reasons name the resource", "will be destroyed: oci_core_instance.worker" in tr.classify(DESTROY)[1], True)
 
+def updates(n: int) -> str:
+    """n in-place updates of a non-sensitive type, as infra-terraform#41's github plan (39 of them)."""
+    body = "".join(f'  # github_repository.repo["r{i}"] will be updated in-place\n' for i in range(n))
+    return body + f"Plan: 0 to add, {n} to change, 0 to destroy.\n"
+
+
+check("39 non-sensitive updates (infra-terraform#41) -> ask", cls(updates(39)), "ask")
+check("large plan says so", any("large plan: 39" in r for r in tr.classify(updates(39))[1]), True)
+check("exactly LARGE_PLAN updates -> show", cls(updates(tr.LARGE_PLAN)), "show")
+check("one over LARGE_PLAN -> ask", cls(updates(tr.LARGE_PLAN + 1)), "ask")
+
 print(f"\n{'FAIL' if FAILS else 'ok'}: {FAILS} başarısız")
 sys.exit(1 if FAILS else 0)
