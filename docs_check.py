@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
 import re
 import sys
@@ -68,8 +69,8 @@ def strip_code(line: str) -> str:
     return re.sub(r"`[^`]*`", lambda m: " " * len(m.group(0)), line)
 
 
-def _nested_repository(root: pathlib.Path, path: pathlib.Path, seen: dict[pathlib.Path, bool]) -> bool:
-    """Whether `path` lies inside another git repository below `root`.
+def _repository_of_its_own(path: pathlib.Path) -> bool:
+    """Whether the directory `path` is another git repository (never called on the root).
 
     The workspace root is itself a repository whose clones of every other repository sit inside
     it, git-ignored. Its pre-push hook runs this with `--root .`, so without this it judged every
@@ -78,25 +79,26 @@ def _nested_repository(root: pathlib.Path, path: pathlib.Path, seen: dict[pathli
     until the template is rendered (narthelix/ops#2356). `.git` is a directory in a clone and a
     file in a worktree or submodule; either marks a repository of its own.
     """
-    for parent in path.relative_to(root).parents:
-        if parent == pathlib.Path("."):
-            break
-        here = root / parent
-        if here not in seen:
-            seen[here] = (here / ".git").exists()
-        if seen[here]:
-            return True
-    return False
+    return (path / ".git").exists()
 
 
 def iter_markdown(root: pathlib.Path):
-    seen: dict[pathlib.Path, bool] = {}
-    for path in sorted(root.rglob("*.md")):
-        if SKIP_DIRS & set(path.relative_to(root).parts):
-            continue
-        if _nested_repository(root, path, seen):
-            continue
-        yield path
+    """Every `*.md` below `root`, sorted, outside SKIP_DIRS and nested repositories.
+
+    Pruned while walking, never filtered afterwards: `root.rglob("*.md")` walked into every
+    skipped tree first and dropped its files one by one. In the workspace that meant every
+    clone's node_modules and build output -- 40,512 files, 41 s of a 42 s pre-push hook
+    (narthelix/ops#2358, 2026-11-20) -- for 5 documents of its own. `os.walk` does not follow
+    directory symlinks, the same as rglob did (see `ephemeral` above).
+    """
+    found: list[pathlib.Path] = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        here = pathlib.Path(dirpath)
+        dirnames[:] = [
+            d for d in dirnames if d not in SKIP_DIRS and not _repository_of_its_own(here / d)
+        ]
+        found.extend(here / f for f in filenames if f.endswith(".md"))
+    yield from sorted(found)
 
 
 def check_links(root: pathlib.Path) -> list[str]:
