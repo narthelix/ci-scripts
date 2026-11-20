@@ -117,6 +117,38 @@ def main() -> int:
         else:
             print(f"ok    {name}")
 
+    # Skipped trees are pruned, not walked and filtered (narthelix/ops#2358): the workspace's
+    # pre-push hook spent 41 s walking 40,512 files in other repos' clones to keep 5. The
+    # result alone cannot show this -- filtering afterwards gives the same list -- so the
+    # directories the walk enters are what is checked.
+    entered: list[str] = []
+    real_walk = docs_check.os.walk
+
+    def recording_walk(top, *args, **kwargs):
+        for step in real_walk(top, *args, **kwargs):
+            entered.append(pathlib.Path(step[0]).relative_to(top).as_posix())
+            yield step
+
+    with tempfile.TemporaryDirectory() as d:
+        root = build(pathlib.Path(d), {
+            ".git/HEAD": "ref: refs/heads/main",
+            "docs/a.md": "own",
+            "app/node_modules/pkg/README.md": "skipped",
+            "clone/.git/HEAD": "ref: refs/heads/main",
+            "clone/deep/b.md": "another repository",
+        })
+        docs_check.os.walk = recording_walk
+        try:
+            listed = [p.relative_to(root).as_posix() for p in docs_check.iter_markdown(root)]
+        finally:
+            docs_check.os.walk = real_walk
+    leaked = [e for e in entered if e.split("/")[-1] in {"node_modules", "pkg", "clone", "deep", ".git"}]
+    if listed != ["docs/a.md"] or leaked:
+        failures += 1
+        print(f"FAIL  walk enters skipped trees: listed={listed} entered={leaked}")
+    else:
+        print("ok    walk prunes SKIP_DIRS and nested repositories instead of entering them")
+
     # The cross-repo case must say *why*, not just "missing": the fix is a
     # different kind of edit (use an absolute URL), so the message is the
     # feature.
